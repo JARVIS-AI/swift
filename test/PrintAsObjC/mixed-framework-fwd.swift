@@ -1,4 +1,4 @@
-// RUN: rm -rf %t && mkdir -p %t
+// RUN: %empty-directory(%t)
 // RUN: %target-swift-frontend(mock-sdk: %clang-importer-sdk) -F %S/Inputs/ -module-name Mixed -import-underlying-module %s -typecheck -emit-objc-header-path %t/mixed.h
 // RUN: %FileCheck -check-prefix=CHECK -check-prefix=NO-IMPORT %s < %t/mixed.h
 // RUN: %check-in-clang -F %S/Inputs/ %t/mixed.h
@@ -17,7 +17,10 @@
 
 // REQUIRES: objc_interop
 
-// CHECK-LABEL: #if defined(__has_feature) && __has_feature(modules)
+// CHECK-LABEL: #if __has_feature(modules)
+// CHECK-NEXT: #if __has_warning
+// CHECK-NEXT: #pragma clang diagnostic
+// CHECK-NEXT: #endif
 // CHECK-NEXT: @import Foundation;
 // CHECK-NEXT: #endif
 
@@ -32,7 +35,7 @@
 import Foundation
 
 public class Dummy: NSNumber {
-  public func getProto() -> CustomProto? {
+  @objc public func getProto() -> CustomProto? {
     return nil
   }
 }

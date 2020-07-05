@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -66,7 +66,7 @@ void ARCRegionState::mergeSuccBottomUp(ARCRegionState &SuccRegionState) {
     // effect of an intersection.
     auto Other = SuccRegionState.PtrToBottomUpState.find(RefCountedValue);
     if (Other == SuccRegionState.PtrToBottomUpState.end()) {
-      PtrToBottomUpState.blot(RefCountedValue);
+      PtrToBottomUpState.erase(RefCountedValue);
       continue;
     }
 
@@ -76,7 +76,7 @@ void ARCRegionState::mergeSuccBottomUp(ARCRegionState &SuccRegionState) {
     // This has the effect of an intersection since we already checked earlier
     // that RefCountedValue was not blotted.
     if (!OtherRefCountedValue) {
-      PtrToBottomUpState.blot(RefCountedValue);
+      PtrToBottomUpState.erase(RefCountedValue);
       continue;
     }
 
@@ -87,7 +87,7 @@ void ARCRegionState::mergeSuccBottomUp(ARCRegionState &SuccRegionState) {
     // of instructions which together semantically act as one ref count
     // increment. Merge the two states together.
     if (!RefCountState.merge(OtherRefCountState)) {
-      PtrToBottomUpState.blot(RefCountedValue);
+      PtrToBottomUpState.erase(RefCountedValue);
     }
   }
 }
@@ -123,7 +123,7 @@ void ARCRegionState::mergePredTopDown(ARCRegionState &PredRegionState) {
     // effect of an intersection.
     auto Other = PredRegionState.PtrToTopDownState.find(RefCountedValue);
     if (Other == PredRegionState.PtrToTopDownState.end()) {
-      PtrToTopDownState.blot(RefCountedValue);
+      PtrToTopDownState.erase(RefCountedValue);
       continue;
     }
 
@@ -132,7 +132,7 @@ void ARCRegionState::mergePredTopDown(ARCRegionState &PredRegionState) {
     // If the other ref count value was blotted, blot our value and continue.
     // This has the effect of an intersection.
     if (!OtherRefCountedValue) {
-      PtrToTopDownState.blot(RefCountedValue);
+      PtrToTopDownState.erase(RefCountedValue);
       continue;
     }
 
@@ -144,8 +144,8 @@ void ARCRegionState::mergePredTopDown(ARCRegionState &PredRegionState) {
     // Attempt to merge Other into this ref count state. If we fail, blot this
     // ref counted value and continue.
     if (!RefCountState.merge(OtherRefCountState)) {
-      DEBUG(llvm::dbgs() << "Failed to merge!\n");
-      PtrToTopDownState.blot(RefCountedValue);
+      LLVM_DEBUG(llvm::dbgs() << "Failed to merge!\n");
+      PtrToTopDownState.erase(RefCountedValue);
       continue;
     }
   }
@@ -170,12 +170,15 @@ static bool isARCSignificantTerminator(TermInst *TI) {
   // against the operand or can use the value in some way.
   case TermKind::ThrowInst:
   case TermKind::ReturnInst:
+  case TermKind::UnwindInst:
+  case TermKind::YieldInst:
   case TermKind::TryApplyInst:
   case TermKind::SwitchValueInst:
   case TermKind::SwitchEnumInst:
   case TermKind::SwitchEnumAddrInst:
   case TermKind::DynamicMethodBranchInst:
   case TermKind::CheckedCastBranchInst:
+  case TermKind::CheckedCastValueBranchInst:
   case TermKind::CheckedCastAddrBranchInst:
     return true;
   }
@@ -246,7 +249,7 @@ static bool processBlockBottomUpInsts(
     SILInstruction *I = *II;
     ++II;
 
-    DEBUG(llvm::dbgs() << "VISITING:\n    " << *I);
+    LLVM_DEBUG(llvm::dbgs() << "VISITING:\n    " << *I);
 
     auto Result = DataflowVisitor.visit(I);
 
@@ -288,7 +291,7 @@ bool ARCRegionState::processBlockBottomUp(
     bool FreezeOwnedArgEpilogueReleases,
     BlotMapVector<SILInstruction *, BottomUpRefCountState> &IncToDecStateMap,
     ImmutablePointerSetFactory<SILInstruction> &SetFactory) {
-  DEBUG(llvm::dbgs() << ">>>> Bottom Up!\n");
+  LLVM_DEBUG(llvm::dbgs() << ">>>> Bottom Up!\n");
 
   SILBasicBlock &BB = *R->getBlock();
   BottomUpDataflowRCStateVisitor<ARCRegionState> DataflowVisitor(
@@ -399,7 +402,7 @@ bool ARCRegionState::processBlockTopDown(
     SILBasicBlock &BB, AliasAnalysis *AA, RCIdentityFunctionInfo *RCIA,
     BlotMapVector<SILInstruction *, TopDownRefCountState> &DecToIncStateMap,
     ImmutablePointerSetFactory<SILInstruction> &SetFactory) {
-  DEBUG(llvm::dbgs() << ">>>> Top Down!\n");
+  LLVM_DEBUG(llvm::dbgs() << ">>>> Top Down!\n");
 
   bool NestingDetected = false;
 
@@ -424,7 +427,7 @@ bool ARCRegionState::processBlockTopDown(
   // For each instruction I in BB...
   for (auto *I : SummarizedInterestingInsts) {
 
-    DEBUG(llvm::dbgs() << "VISITING:\n    " << *I);
+    LLVM_DEBUG(llvm::dbgs() << "VISITING:\n    " << *I);
 
     auto Result = DataflowVisitor.visit(I);
 
@@ -515,9 +518,9 @@ bool ARCRegionState::processTopDown(
 
 static bool isStrongEntranceInstruction(const SILInstruction &I) {
   switch (I.getKind()) {
-  case ValueKind::AllocRefInst:
-  case ValueKind::AllocRefDynamicInst:
-  case ValueKind::AllocBoxInst:
+  case SILInstructionKind::AllocRefInst:
+  case SILInstructionKind::AllocRefDynamicInst:
+  case SILInstructionKind::AllocBoxInst:
     return true;
   default:
     return false;
@@ -528,7 +531,9 @@ void ARCRegionState::summarizeBlock(SILBasicBlock *BB) {
   SummarizedInterestingInsts.clear();
 
   for (auto &I : *BB)
-    if (!canNeverUseValues(&I) || I.mayReleaseOrReadRefCount() ||
+    // FIXME: mayReleaseOrReadRefCount should be a strict subset of
+    // canUseObject. If not, there is a bug in canUseObject.
+    if (canUseObject(&I) || I.mayReleaseOrReadRefCount() ||
         isStrongEntranceInstruction(I))
       SummarizedInterestingInsts.push_back(&I);
 }

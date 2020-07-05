@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -41,8 +41,8 @@ static bool gatherValues(SILFunction &Fn, std::vector<SILValue> &Values) {
     for (auto *Arg : BB.getArguments())
       Values.push_back(SILValue(Arg));
     for (auto &II : BB)
-      if (II.hasValue())
-        Values.push_back(&II);
+      for (auto result : II.getResults())
+        Values.push_back(result);
   }
   return Values.size() > 1;
 }
@@ -97,7 +97,6 @@ class SILAADumper : public SILModuleTransform {
     }
   }
 
-  StringRef getName() override { return "AA Dumper"; }
 };
         
 } // end anonymous namespace

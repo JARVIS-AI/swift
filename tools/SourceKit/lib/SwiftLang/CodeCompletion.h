@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -17,17 +17,18 @@
 #include "swift/IDE/CodeCompletion.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/Optional.h"
+#include "llvm/ADT/StringMap.h"
 
 namespace SourceKit {
 namespace CodeCompletion {
 
-using CodeCompletionDeclKind = swift::ide::CodeCompletionDeclKind;
-using CodeCompletionKeywordKind = swift::ide::CodeCompletionKeywordKind;
-using CodeCompletionLiteralKind = swift::ide::CodeCompletionLiteralKind;
-using SemanticContextKind = swift::ide::SemanticContextKind;
-using CodeCompletionString = swift::ide::CodeCompletionString;
+using swift::ide::CodeCompletionDeclKind;
+using swift::ide::CodeCompletionKeywordKind;
+using swift::ide::CodeCompletionLiteralKind;
+using swift::ide::SemanticContextKind;
+using swift::ide::CodeCompletionString;
 using SwiftResult = swift::ide::CodeCompletionResult;
-using CompletionKind = swift::ide::CompletionKind;
+using swift::ide::CompletionKind;
 
 struct Group;
 class CodeCompletionOrganizer;
@@ -123,8 +124,7 @@ class CompletionBuilder {
   CompletionSink &sink;
   SwiftResult &current;
   bool modified = false;
-  bool isNotRecommended;
-  Completion::NotRecommendedReason notRecommendedReason;
+  Completion::ExpectedTypeRelation typeRelation;
   SemanticContextKind semanticContext;
   CodeCompletionString *completionString;
   llvm::SmallVector<char, 64> originalName;
@@ -135,7 +135,8 @@ class CompletionBuilder {
 public:
   static void getFilterName(CodeCompletionString *str, raw_ostream &OS);
   static void getDescription(SwiftResult *result, raw_ostream &OS,
-                             bool leadingPunctuation);
+                             bool leadingPunctuation,
+                             bool annotatedDecription = false);
 
 public:
   CompletionBuilder(CompletionSink &sink, SwiftResult &base);
@@ -147,11 +148,9 @@ public:
     moduleImportDepth = value;
   }
 
-  void setNotRecommended(Completion::NotRecommendedReason Reason) {
+  void setExpectedTypeRelation(Completion::ExpectedTypeRelation Relation) {
     modified = true;
-    notRecommendedReason = Reason;
-    if (Reason != Completion::NoReason)
-      isNotRecommended = true;
+    typeRelation = Relation;
   }
 
   void setSemanticContext(SemanticContextKind kind) {
@@ -231,13 +230,13 @@ struct FilterRules {
   // FIXME: hide individual custom completions
 
   llvm::StringMap<bool> hideModule;
-  llvm::StringMap<bool> hideByName;
+  llvm::StringMap<bool> hideByFilterName;
+  llvm::StringMap<bool> hideByDescription;
 
   bool hideCompletion(Completion *completion) const;
-  bool hideCompletion(SwiftResult *completion,
-                      StringRef name,
-                      void *customKind = nullptr) const;
-  bool hideName(StringRef name) const;
+  bool hideCompletion(SwiftResult *completion, StringRef name,
+                      StringRef description, void *customKind = nullptr) const;
+  bool hideFilterName(StringRef name) const;
 };
 
 } // end namespace CodeCompletion

@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -22,63 +22,57 @@
 namespace swift {
   class SILOptions;
   class SILTransform;
+  class SILModuleTransform;
 
   namespace irgen {
     class IRGenModule;
   }
 
-  /// \brief Run all the SIL diagnostic passes on \p M.
+  /// Run all the SIL diagnostic passes on \p M.
   ///
   /// \returns true if the diagnostic passes produced an error
   bool runSILDiagnosticPasses(SILModule &M);
 
-  /// \brief Run all the SIL performance optimization passes on \p M.
+  /// Run all the SIL performance optimization passes on \p M.
   void runSILOptimizationPasses(SILModule &M);
 
-  /// \brief Run all SIL passes for -Onone on module \p M.
+  /// Run all SIL passes for -Onone on module \p M.
   void runSILPassesForOnone(SILModule &M);
 
-  /// \brief Run the SIL ownership eliminator pass on \p M.
+  /// Run the SIL ownership eliminator pass on \p M.
   bool runSILOwnershipEliminatorPass(SILModule &M);
 
   void runSILOptimizationPassesWithFileSpecification(SILModule &Module,
                                                      StringRef FileName);
 
-  /// \brief Detect and remove unreachable code. Diagnose provably unreachable
+  /// Detect and remove unreachable code. Diagnose provably unreachable
   /// user code.
   void performSILDiagnoseUnreachable(SILModule *M);
 
-  /// \brief Remove dead functions from \p M.
+  /// Remove dead functions from \p M.
   void performSILDeadFunctionElimination(SILModule *M);
 
-  /// \brief Link a SILFunction declaration to the actual definition in the
-  /// serialized modules.
-  ///
-  /// \param M the SILModule on which to operate
-  /// \param LinkAll when true, always link. For testing purposes.
-  void performSILLinking(SILModule *M, bool LinkAll = false);
+  /// Convert SIL to a lowered form suitable for IRGen.
+  void runSILLoweringPasses(SILModule &M);
 
-  /// \brief Cleanup instructions/builtin calls not suitable for IRGen.
-  void performSILCleanup(SILModule *M);
+  /// Perform SIL Inst Count on M if needed.
+  void performSILInstCountIfNeeded(SILModule *M);
 
-  /// \brief Perform SIL Inst Count on M.
-  void performSILInstCount(SILModule *M);
-
-  /// \brief Identifiers for all passes. Used to procedurally create passes from
+  /// Identifiers for all passes. Used to procedurally create passes from
   /// lists of passes.
   enum class PassKind {
-#define PASS(ID, NAME, DESCRIPTION) ID,
+#define PASS(ID, TAG, NAME) ID,
 #define PASS_RANGE(ID, START, END) ID##_First = START, ID##_Last = END,
 #include "Passes.def"
     invalidPassKind
   };
 
   PassKind PassKindFromString(StringRef ID);
-  StringRef PassKindName(PassKind Kind);
   StringRef PassKindID(PassKind Kind);
+  StringRef PassKindTag(PassKind Kind);
 
-#define PASS(ID, NAME, DESCRIPTION) SILTransform *create##ID();
-#define IRGEN_PASS(ID, NAME, DESCRIPTION)
+#define PASS(ID, TAG, NAME) SILTransform *create##ID();
+#define IRGEN_PASS(ID, TAG, NAME)
 #include "Passes.def"
 
 } // end namespace swift

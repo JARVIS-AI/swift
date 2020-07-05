@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -35,7 +35,18 @@ class Traversal : public TypeVisitor<Traversal, bool>
   bool visitErrorType(ErrorType *ty) { return false; }
   bool visitUnresolvedType(UnresolvedType *ty) { return false; }
   bool visitBuiltinType(BuiltinType *ty) { return false; }
-  bool visitNameAliasType(NameAliasType *ty) { return false; }
+  bool visitTypeAliasType(TypeAliasType *ty) {
+    if (auto parent = ty->getParent())
+      if (doIt(parent)) return true;
+
+    for (const auto &arg : ty->getDirectGenericArgs())
+      if (doIt(arg))
+        return true;
+    
+    return false;
+
+  }
+  bool visitSILTokenType(SILTokenType *ty) { return false; }
 
   bool visitParenType(ParenType *ty) {
     return doIt(ty->getUnderlyingType());
@@ -73,8 +84,11 @@ class Traversal : public TypeVisitor<Traversal, bool>
   }
 
   bool visitAnyFunctionType(AnyFunctionType *ty) {
-    if (doIt(ty->getInput()))
-      return true;
+    for (const auto &param : ty->getParams()) {
+      if (doIt(param.getOldType()))
+        return true;
+    }
+
     return doIt(ty->getResult());
   }
 
@@ -94,6 +108,8 @@ class Traversal : public TypeVisitor<Traversal, bool>
         if (doIt(req.getSecondType()))
           return true;
         break;
+      case RequirementKind::Layout:
+        break;
       }
     }
 
@@ -101,19 +117,37 @@ class Traversal : public TypeVisitor<Traversal, bool>
   }
 
   bool visitSILFunctionType(SILFunctionType *ty) {
+    // TODO: Should this be the only kind of walk we allow?
+    if (auto subs = ty->getInvocationSubstitutions()) {
+      for (auto paramTy : subs.getReplacementTypes()) {
+        if (doIt(paramTy))
+          return true;
+      }
+
+      return false;
+    }
+    if (auto subs = ty->getPatternSubstitutions()) {
+      for (auto paramTy : subs.getReplacementTypes()) {
+        if (doIt(paramTy))
+          return true;
+      }
+
+      return false;
+    }
+    
     for (auto param : ty->getParameters())
-      if (doIt(param.getType()))
+      if (doIt(param.getInterfaceType()))
         return true;
-    for (auto result : ty->getAllResults())
-      if (doIt(result.getType()))
+    for (auto result : ty->getResults())
+      if (doIt(result.getInterfaceType()))
         return true;
     if (ty->hasErrorResult())
-      if (doIt(ty->getErrorResult().getType()))
+      if (doIt(ty->getErrorResult().getInterfaceType()))
         return true;
     return false;
   }
 
-  bool visitSyntaxSugarType(SyntaxSugarType *ty) {
+  bool visitUnarySyntaxSugarType(UnarySyntaxSugarType *ty) {
     return doIt(ty->getBaseType());
   }
 
@@ -122,8 +156,8 @@ class Traversal : public TypeVisitor<Traversal, bool>
   }
 
   bool visitProtocolCompositionType(ProtocolCompositionType *ty) {
-    for (auto proto : ty->getProtocols())
-      if (doIt(proto))
+    for (auto member : ty->getMembers())
+      if (doIt(member))
         return true;
     return false;
   }
@@ -153,18 +187,29 @@ class Traversal : public TypeVisitor<Traversal, bool>
 
     return false;
   }
+  
+  bool visitArchetypeType(ArchetypeType *ty) {
+    // If the root is an opaque archetype, visit its substitution replacement
+    // types.
+    if (auto opaqueRoot = dyn_cast<OpaqueTypeArchetypeType>(ty->getRoot())) {
+      for (auto arg : opaqueRoot->getSubstitutions().getReplacementTypes()) {
+        if (doIt(arg)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
 
   bool visitTypeVariableType(TypeVariableType *ty) { return false; }
   
   bool visitSILBlockStorageType(SILBlockStorageType *ty) {
-    if (doIt(ty->getCaptureType()))
-      return true;
-    return false;
+    return doIt(ty->getCaptureType());
   }
 
   bool visitSILBoxType(SILBoxType *ty) {
-    for (auto &arg : ty->getGenericArgs()) {
-      if (doIt(arg.getReplacement()))
+    for (Type type : ty->getSubstitutions().getReplacementTypes()) {
+      if (type && doIt(type))
         return true;
     }
     return false;

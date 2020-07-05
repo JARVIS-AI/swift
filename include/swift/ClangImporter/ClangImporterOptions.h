@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -12,6 +12,8 @@
 
 #ifndef SWIFT_CLANGIMPORTER_CLANGIMPORTEROPTIONS_H
 #define SWIFT_CLANGIMPORTER_CLANGIMPORTEROPTIONS_H
+
+#include "llvm/ADT/Hashing.h"
 
 #include <string>
 #include <vector>
@@ -35,13 +37,33 @@ public:
   /// Equivalent to Clang's -mcpu=.
   std::string TargetCPU;
 
+  /// The path to which we should store indexing data, if any.
+  std::string IndexStorePath;
+
+  /// The bridging header or PCH that will be imported.
+  std::string BridgingHeader;
+
+  /// When automatically generating a precompiled header from the bridging
+  /// header, place it in this directory.
+  std::string PrecompiledHeaderOutputDir;
+
+  /// The optimizaton setting.  This doesn't typically matter for
+  /// import, but it can affect Clang's IR generation of static functions.
+  std::string Optimization;
+
+  /// Disable validating the persistent PCH.
+  bool PCHDisableValidation = false;
+
   /// \see Mode
-  enum class Modes {
+  enum class Modes : uint8_t {
     /// Set up Clang for importing modules into Swift and generating IR from
     /// Swift code.
     Normal,
     /// Set up Clang for backend compilation only.
-    EmbedBitcode
+    EmbedBitcode,
+    /// Set up Clang to emit a precompiled module from a C/Objective-C module
+    /// map or dump debugging info about a precompiled module.
+    PrecompiledModule
   };
 
   /// Controls how Clang is initially set up.
@@ -71,9 +93,39 @@ public:
   /// If true ignore the swift bridged attribute.
   bool DisableSwiftBridgeAttr = false;
 
-  /// When set, don't validate module system headers. If a header is modified
-  /// and this is not set, clang will rebuild the module.
-  bool DisableModulesValidateSystemHeaders = false;
+  /// When set, don't look for or load overlays.
+  bool DisableOverlayModules = false;
+
+  /// When set, don't enforce warnings with -Werror.
+  bool DebuggerSupport = false;
+
+  /// When set, ClangImporter is disabled, and all requests go to the
+  /// DWARFImporter delegate.
+  bool DisableSourceImport = false;
+
+  /// When set, use ExtraArgs alone to configure clang instance because ExtraArgs
+  /// contains the full option set.
+  bool ExtraArgsOnly = false;
+
+  /// Return a hash code of any components from these options that should
+  /// contribute to a Swift Bridging PCH hash.
+  llvm::hash_code getPCHHashComponents() const {
+    using llvm::hash_combine;
+    using llvm::hash_combine_range;
+
+    return hash_combine(ModuleCachePath,
+                        hash_combine_range(ExtraArgs.begin(), ExtraArgs.end()),
+                        OverrideResourceDir,
+                        TargetCPU,
+                        BridgingHeader,
+                        PrecompiledHeaderOutputDir,
+                        static_cast<uint8_t>(Mode),
+                        DetailedPreprocessingRecord,
+                        ImportForwardDeclarations,
+                        InferImportAsMember,
+                        DisableSwiftBridgeAttr,
+                        DisableOverlayModules);
+  }
 };
 
 } // end namespace swift

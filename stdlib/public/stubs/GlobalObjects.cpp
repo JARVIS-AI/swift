@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -17,29 +17,33 @@
 //===----------------------------------------------------------------------===//
 
 #include "../SwiftShims/GlobalObjects.h"
+#include "../SwiftShims/Random.h"
 #include "swift/Runtime/Metadata.h"
 #include "swift/Runtime/Debug.h"
+#include "swift/Runtime/EnvironmentVariables.h"
 #include <stdlib.h>
 
 namespace swift {
-// FIXME(ABI)#76 : does this declaration need SWIFT_RUNTIME_STDLIB_INTERFACE?
-// _direct type metadata for Swift._EmptyArrayStorage
-SWIFT_RUNTIME_STDLIB_INTERFACE
-extern "C" ClassMetadata CLASS_METADATA_SYM(s18_EmptyArrayStorage);
+// FIXME(ABI)#76 : does this declaration need SWIFT_RUNTIME_STDLIB_API?
+// _direct type metadata for Swift.__EmptyArrayStorage
+SWIFT_RUNTIME_STDLIB_API
+ClassMetadata CLASS_METADATA_SYM(s19__EmptyArrayStorage);
 
-// _direct type metadata for Swift._RawNativeDictionaryStorage
-SWIFT_RUNTIME_STDLIB_INTERFACE
-extern "C" ClassMetadata CLASS_METADATA_SYM(s27_RawNativeDictionaryStorage);
+// _direct type metadata for Swift.__EmptyDictionarySingleton
+SWIFT_RUNTIME_STDLIB_API
+ClassMetadata CLASS_METADATA_SYM(s26__EmptyDictionarySingleton);
 
-// _direct type metadata for Swift._RawNativeSetStorage
-SWIFT_RUNTIME_STDLIB_INTERFACE
-extern "C" ClassMetadata CLASS_METADATA_SYM(s20_RawNativeSetStorage);
+// _direct type metadata for Swift.__EmptySetSingleton
+SWIFT_RUNTIME_STDLIB_API
+ClassMetadata CLASS_METADATA_SYM(s19__EmptySetSingleton);
 } // namespace swift
 
+SWIFT_RUNTIME_STDLIB_API
 swift::_SwiftEmptyArrayStorage swift::_swiftEmptyArrayStorage = {
   // HeapObject header;
   {
-    &CLASS_METADATA_SYM(s18_EmptyArrayStorage), // isa pointer
+    &swift::CLASS_METADATA_SYM(s19__EmptyArrayStorage), // isa pointer
+    InlineRefCounts::Immortal
   },
   
   // _SwiftArrayBodyStorage body;
@@ -49,94 +53,84 @@ swift::_SwiftEmptyArrayStorage swift::_swiftEmptyArrayStorage = {
   }
 };
 
-
-
-swift::_SwiftEmptyDictionaryStorage swift::_swiftEmptyDictionaryStorage = {
+SWIFT_RUNTIME_STDLIB_API
+swift::_SwiftEmptyDictionarySingleton swift::_swiftEmptyDictionarySingleton = {
   // HeapObject header;
   {
-    &CLASS_METADATA_SYM(s27_RawNativeDictionaryStorage), // isa pointer
+    &swift::CLASS_METADATA_SYM(s26__EmptyDictionarySingleton), // isa pointer
+    InlineRefCounts::Immortal
   },
   
   // _SwiftDictionaryBodyStorage body;
   {
-    // We set the capacity to 1 so that there's an empty hole to search.
-    // Any insertion will lead to a real storage being allocated, because 
-    // Dictionary guarantees there's always another empty hole after insertion.
-    1, // int capacity;                               
+    // Setting the scale to 0 makes for a bucketCount of 1 -- so that the
+    // storage consists of a single unoccupied bucket. The capacity is set to
+    // 0 so that any insertion will lead to real storage being allocated.
     0, // int count;
-    
-    // _SwiftUnsafeBitMap initializedEntries
-    {
-      &swift::_swiftEmptyDictionaryStorage.entries, // unsigned int* values;
-      1 // int bitCount; (1 so there's something for iterators to read)
-    },
-    
-    (void*)1, // void* keys; (non-null garbage)
-    (void*)1  // void* values; (non-null garbage)
+    0, // int capacity;                                    
+    0, // int8 scale;
+    0, // int8 reservedScale;
+    0, // int16 extra;
+    0, // int32 age;
+    0, // int seed;
+    (void *)1, // void* keys; (non-null garbage)
+    (void *)1  // void* values; (non-null garbage)
   },
 
-  0 // int entries; (zero'd bits)
+  // bucket 0 is unoccupied; other buckets are out-of-bounds
+  static_cast<__swift_uintptr_t>(~1) // int metadata; 
 };
 
-
-swift::_SwiftEmptySetStorage swift::_swiftEmptySetStorage = {
+SWIFT_RUNTIME_STDLIB_API
+swift::_SwiftEmptySetSingleton swift::_swiftEmptySetSingleton = {
   // HeapObject header;
   {
-    &CLASS_METADATA_SYM(s20_RawNativeSetStorage), // isa pointer
+    &swift::CLASS_METADATA_SYM(s19__EmptySetSingleton), // isa pointer
+    InlineRefCounts::Immortal
   },
   
-  // _SwiftDictionaryBodyStorage body;
+  // _SwiftSetBodyStorage body;
   {
-    // We set the capacity to 1 so that there's an empty hole to search.
-    // Any insertion will lead to a real storage being allocated, because 
-    // Dictionary guarantees there's always another empty hole after insertion.
-    1, // int capacity;                                    
+    // Setting the scale to 0 makes for a bucketCount of 1 -- so that the
+    // storage consists of a single unoccupied bucket. The capacity is set to
+    // 0 so that any insertion will lead to real storage being allocated.
     0, // int count;
-    
-    // _SwiftUnsafeBitMap initializedEntries
-    {
-      &swift::_swiftEmptySetStorage.entries, // unsigned int* values;
-      1 // int bitCount; (1 so there's something for iterators to read)
-    },
-    
-    (void*)1 // void* keys; (non-null garbage)
+    0, // int capacity;                                    
+    0, // int8 scale;
+    0, // int8 reservedScale;
+    0, // int16 extra;
+    0, // int32 age;
+    0, // int seed;
+    (void *)1, // void *rawElements; (non-null garbage)
   },
 
-  0 // int entries; (zero'd bits)
+  // bucket 0 is unoccupied; other buckets are out-of-bounds
+  static_cast<__swift_uintptr_t>(~1) // int metadata;
 };
 
-static __swift_uint64_t randomUInt64() {
-#if defined(__APPLE__)
-  return static_cast<__swift_uint64_t>(arc4random()) |
-         (static_cast<__swift_uint64_t>(arc4random()) << 32);
-#else
-  auto devUrandom = fopen("/dev/urandom", "r");
-  if (!devUrandom) {
-    swift::fatalError(/* flags = */ 0, "Opening \"/dev/urandom\" failed");
+static swift::_SwiftHashingParameters initializeHashingParameters() {
+  // Setting the environment variable SWIFT_DETERMINISTIC_HASHING to "1"
+  // disables randomized hash seeding. This is useful in cases we need to ensure
+  // results are repeatable, e.g., in certain test environments.  (Note that
+  // even if the seed override is enabled, hash values aren't guaranteed to
+  // remain stable across even minor stdlib releases.)
+  if (swift::runtime::environment::SWIFT_DETERMINISTIC_HASHING()) {
+    return { 0, 0, true };
   }
-  uint64_t result;
-  if (fread(&result, sizeof(result), 1, devUrandom) != 1) {
-    swift::fatalError(/* flags = */ 0, "Reading from \"/dev/urandom\" failed");
-  }
-  if (fclose(devUrandom)) {
-    swift::fatalError(/* flags = */ 0, "Closing \"/dev/urandom\" failed");
-  }
-  return result;
-#endif
+  __swift_uint64_t seed0 = 0, seed1 = 0;
+  swift::swift_stdlib_random(&seed0, sizeof(seed0));
+  swift::swift_stdlib_random(&seed1, sizeof(seed1));
+  return { seed0, seed1, false };
 }
 
 SWIFT_ALLOWED_RUNTIME_GLOBAL_CTOR_BEGIN
-swift::_SwiftHashingSecretKey swift::_swift_stdlib_Hashing_secretKey = {
-  randomUInt64(), randomUInt64()
-};
+swift::_SwiftHashingParameters swift::_swift_stdlib_Hashing_parameters =
+  initializeHashingParameters();
 SWIFT_ALLOWED_RUNTIME_GLOBAL_CTOR_END
 
-__swift_uint64_t swift::_swift_stdlib_HashingDetail_fixedSeedOverride = 0;
 
-namespace llvm { namespace hashing { namespace detail {
-  // An extern variable expected by LLVM's hashing templates. We don't link any
-  // LLVM libs into the runtime, so define this here.
-  size_t fixed_seed_override = 0;
-} // namespace detail
-} // namespace hashing
-} // namespace llvm
+SWIFT_RUNTIME_STDLIB_API
+void swift::_swift_instantiateInertHeapObject(void *address,
+                                              const HeapMetadata *metadata) {
+  ::new (address) HeapObject{metadata};
+}

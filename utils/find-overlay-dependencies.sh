@@ -3,7 +3,7 @@
 #
 ## This source file is part of the Swift.org open source project
 ##
-## Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+## Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 ## Licensed under Apache License v2.0 with Runtime Library Exception
 ##
 ## See https://swift.org/LICENSE.txt for license information
@@ -32,7 +32,7 @@ case $# in
   usage ;;
 esac
 
-OVERLAYS_PATH=$(dirname "$0")/../stdlib/public/SDK/
+OVERLAYS_PATH=$(dirname "$0")/../stdlib/public/Darwin/
 CMAKE_PATH=$OVERLAYS_PATH/$1/CMakeLists.txt
 
 # Add both directions to associative array
@@ -56,6 +56,8 @@ SDKS[iphoneos]="arm64"
 SDKS[appletvos]="arm64"
 SDKS[watchos]="armv7k"
 
+SDKS_ORDERED=(macosx iphoneos appletvos watchos)
+
 typeset -A CMAKE_DEPENDS_NAME
 CMAKE_DEPENDS_NAME[macosx]="SWIFT_MODULE_DEPENDS_OSX"
 CMAKE_DEPENDS_NAME[iphoneos]="SWIFT_MODULE_DEPENDS_IOS"
@@ -63,15 +65,16 @@ CMAKE_DEPENDS_NAME[appletvos]="SWIFT_MODULE_DEPENDS_TVOS"
 CMAKE_DEPENDS_NAME[watchos]="SWIFT_MODULE_DEPENDS_WATCHOS"
 
 echo $1
-for sdk in ${(k)SDKS}; do
+for sdk in $SDKS_ORDERED; do
+  sdkfull="${sdk}${SUFFIX}"
   arch=$SDKS[$sdk]
-  printf "%s:\n\t" "$sdk"
-  deps=$(echo "@import $1;" | xcrun -sdk $sdk clang -arch $arch -x objective-c - -M -fmodules 2>/dev/null)
+  printf "%s:\n\t" "$sdkfull"
+  deps=$(echo "@import $1;" | xcrun -sdk "${sdkfull}" clang -arch $arch -x objective-c -F $(xcrun -show-sdk-path -sdk "${sdkfull}")/System/Library/PrivateFrameworks - -M -fmodules 2>/dev/null)
   if [[ $? != 0 ]]; then
     # Clear the cmake file of this unsupported platform and loop
     echo "unsupported"
     # Disable the unsupported platform and leave a note
-    sed -i "" -E -e "s/^([ \t]*)($CMAKE_DEPENDS_NAME[$sdk]).*$/\1# \2 # unsupported platform/" "$CMAKE_PATH"
+    sed -i "" -E -e "s/^([ \t]*)($CMAKE_DEPENDS_NAME[$sdk]) .*$/\1# \2 # unsupported platform/" "$CMAKE_PATH"
     continue
   fi
 
@@ -85,9 +88,22 @@ for sdk in ${(k)SDKS}; do
         egrep -q "\b$overlay\b") &&
         DEPENDS_ON+=${CUSTOM_NAMED_MODULES[$overlay]-$overlay}
   done
+
+  if [[ $sdk != macosx* ]]; then
+    DEPENDS_ON=("${(@)DEPENDS_ON:#XPC}")
+  fi
+
   echo "$DEPENDS_ON"
   if [[ $UPDATE_CMAKE == 1 ]]; then
-    sed -i "" -E -e "s/^([ \t]*$CMAKE_DEPENDS_NAME[$sdk]).*$/\1 $DEPENDS_ON # auto-updated/" "$CMAKE_PATH"
+    # Get existing list; only update if there is a difference.
+    orig="$(sed -E -n -e "s/^([ \t]*$CMAKE_DEPENDS_NAME[$sdk]) ([^#]*)(#.*)?$/\2/p" "$CMAKE_PATH" | sed 's/ *$//')"
+    if [ -z "$orig" ]; then
+      echo "\twarning: Cannot find $CMAKE_DEPENDS_NAME[$sdk] declaration"
+    fi
+    diff="$(echo "$orig" "$DEPENDS_ON" | tr ' ' '\n' | sort | uniq -u)"
+    if [ -n "$diff" ]; then
+      sed -i "" -E -e "s/^([ \t]*$CMAKE_DEPENDS_NAME[$sdk]) .*$/\1 $DEPENDS_ON # auto-updated/" "$CMAKE_PATH"
+    fi
   fi
 done
 echo # newline

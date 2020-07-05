@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -21,6 +21,7 @@
 namespace swift {
   class CompilerInvocation;
   class ValueDecl;
+  class ModuleDecl;
 }
 
 namespace SourceKit {
@@ -50,6 +51,7 @@ public:
   static SwiftInterfaceGenContextRef createForSwiftSource(StringRef DocumentName,
                                                           StringRef SourceFileName,
                                                           ASTUnitRef AstUnit,
+                                                          swift::CompilerInvocation Invocation,
                                                           std::string &ErrMsg);
 
   ~SwiftInterfaceGenContext();
@@ -57,6 +59,7 @@ public:
   StringRef getDocumentName() const;
   StringRef getModuleOrHeaderName() const;
   bool isModule() const;
+  swift::ModuleDecl *getModuleDecl() const;
 
   bool matches(StringRef ModuleName, const swift::CompilerInvocation &Invok);
 

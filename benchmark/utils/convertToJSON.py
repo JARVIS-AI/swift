@@ -4,7 +4,7 @@
 #
 #  This source file is part of the Swift.org open source project
 #
-#  Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+#  Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 #  Licensed under Apache License v2.0 with Runtime Library Exception
 #
 #  See https://swift.org/LICENSE.txt for license information
@@ -57,6 +57,8 @@
 #     ]
 # }
 
+from __future__ import print_function
+
 import json
 import re
 import sys
@@ -72,9 +74,9 @@ VALGROUP = 4
 
 if __name__ == "__main__":
     data = {}
-    data['Tests'] = []
-    data['Machine'] = {}
-    data['Run'] = {}
+    data["Tests"] = []
+    data["Machine"] = {}
+    data["Run"] = {}
     for line in sys.stdin:
         m = SCORERE.match(line)
         if not m:
@@ -82,8 +84,8 @@ if __name__ == "__main__":
             if not m:
                 continue
         test = {}
-        test['Data'] = [int(m.group(VALGROUP))]
-        test['Info'] = {}
-        test['Name'] = [m.group(KEYGROUP)]
-        data['Tests'].append(test)
+        test["Data"] = [int(m.group(VALGROUP))]
+        test["Info"] = {}
+        test["Name"] = [m.group(KEYGROUP)]
+        data["Tests"].append(test)
     print(json.dumps(data, sort_keys=True, indent=4))

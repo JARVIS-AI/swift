@@ -3,7 +3,9 @@
 func markUsed<T>(_ t: T) {}
 
 func f0(_: Float) -> Float {}
+// expected-note@-1 {{candidate expects value of type 'Float' for parameter #1}}
 func f0(_: Int) -> Int {}
+// expected-note@-1 {{candidate expects value of type 'Int' for parameter #1}}
 
 func f1(_: Int) {}
 
@@ -24,8 +26,7 @@ _ = f0(1)
 f1(f0(1))
 f1(identity(1))
 
-f0(x) // expected-error{{cannot invoke 'f0' with an argument list of type '(X)'}}
-// expected-note @-1 {{overloads for 'f0' exist with these partially matching parameter lists: (Float), (Int)}}
+f0(x) // expected-error{{no exact matches in call to global function 'f0'}}
 
 _ = f + 1
 _ = f2(i)
@@ -81,17 +82,17 @@ struct X2d {
 // Invalid declarations
 // FIXME: Suppress the diagnostic for the call below, because the invalid
 // declaration would have matched.
-func f3(_ x: Intthingy) -> Int { } // expected-error{{use of undeclared type 'Intthingy'}}
+func f3(_ x: Intthingy) -> Int { } // expected-error{{cannot find type 'Intthingy' in scope}}
 
 func f3(_ x: Float) -> Float { }
 f3(i) // expected-error{{cannot convert value of type 'Int' to expected argument type 'Float'}}
 
-func f4(_ i: Wonka) { } // expected-error{{use of undeclared type 'Wonka'}}
-func f4(_ j: Wibble) { } // expected-error{{use of undeclared type 'Wibble'}}
+func f4(_ i: Wonka) { } // expected-error{{cannot find type 'Wonka' in scope}}
+func f4(_ j: Wibble) { } // expected-error{{cannot find type 'Wibble' in scope}}
 f4(5)
 
 func f1() {
-  var c : Class // expected-error{{use of undeclared type 'Class'}}
+  var c : Class // expected-error{{cannot find type 'Class' in scope}}
   markUsed(c.x) // make sure error does not cascade here
 }
 
@@ -126,16 +127,18 @@ func test20886179(_ handlers: [(Int) -> Void], buttonIndex: Int) {
 
 // The problem here is that the call has a contextual result type incompatible
 // with *all* overload set candidates.  This is not an ambiguity.
-func overloaded_identity(_ a : Int) -> Int {}
-func overloaded_identity(_ b : Float) -> Float {}
+func overloaded_identity(_ a : Int) -> Int {} // expected-note {{'overloaded_identity' produces 'Int', not the expected contextual result type '()'}} expected-note {{'overloaded_identity' declared her}}
+func overloaded_identity(_ b : Float) -> Float {} // expected-note {{'overloaded_identity' produces 'Float', not the expected contextual result type '()'}}
 
 func test_contextual_result_1() {
-  return overloaded_identity()  // expected-error {{cannot invoke 'overloaded_identity' with no arguments}}
-  // expected-note @-1 {{overloads for 'overloaded_identity' exist with these partially matching parameter lists: (Int), (Float)}}
+  return overloaded_identity()  // expected-error {{missing argument for parameter #1 in call}}
+  // expected-error@-1 {{no 'overloaded_identity' candidates produce the expected contextual result type '()'}}
 }
 
 func test_contextual_result_2() {
-  return overloaded_identity(1)  // expected-error {{unexpected non-void return value in void function}}
+  return overloaded_identity(1)
+  // expected-error@-1 {{unexpected non-void return value in void function}}
+  // expected-note@-2 {{did you mean to add a return type?}}
 }
 
 // rdar://problem/24128153
@@ -153,7 +156,9 @@ struct X1 {
 }
 
 let x1 = X1(Int.self)
-let x1check: X1 = x1 // expected-error{{value of optional type 'X1?' not unwrapped; did you mean to use '!' or '?'?}}
+let x1check: X1 = x1 // expected-error{{value of optional type 'X1?' must be unwrapped}}
+  // expected-note@-1{{coalesce}}
+  // expected-note@-2{{force-unwrap}}
 
 
 struct X2 {
@@ -164,7 +169,9 @@ struct X2 {
 }
 
 let x2 = X2(Int.self)
-let x2check: X2 = x2 // expected-error{{value of optional type 'X2?' not unwrapped; did you mean to use '!' or '?'?}}
+let x2check: X2 = x2 // expected-error{{value of optional type 'X2?' must be unwrapped}}
+  // expected-note@-1{{coalesce}}
+  // expected-note@-2{{force-unwrap}}
 
 // rdar://problem/28051973
 struct R_28051973 {
@@ -186,3 +193,56 @@ func overloadedMethod<T>() {}
 
 overloadedMethod()
 // expected-error@-1 {{missing argument for parameter 'n' in call}}
+
+// Ensure we select the overload of '??' returning T? rather than T.
+func SR3817(_ d: [String : Any], _ s: String, _ t: String) -> Any {
+  if let r = d[s] ?? d[t] {
+    return r
+  } else {
+    return 0
+  }
+}
+
+// Overloading with mismatched labels.
+func f6<T>(foo: T) { }
+func f6<T: P1>(bar: T) { }
+
+struct X6 {
+	init<T>(foo: T) { }
+	init<T: P1>(bar: T) { }
+}
+
+func test_f6() {
+	let _: (X1a) -> Void = f6
+	let _: (X1a) -> X6 = X6.init
+}
+
+func curry<LHS, RHS, R>(_ f: @escaping (LHS, RHS) -> R) -> (LHS) -> (RHS) -> R {
+  return { lhs in { rhs in f(lhs, rhs) } }
+}
+
+// We need to have an alternative version of this to ensure that there's an overload disjunction created.
+func curry<F, S, T, R>(_ f: @escaping (F, S, T) -> R) -> (F) -> (S) -> (T) -> R {
+  return { fst in { snd in { thd in f(fst, snd, thd) } } }
+}
+
+// Ensure that we consider these unambiguous
+let _ = curry(+)(1)
+let _ = [0].reduce(0, +)
+let _ = curry(+)("string vs. pointer")
+
+
+func autoclosure1<T>(_: T, _: @autoclosure () -> X) { }
+
+func autoclosure1<T>(_: [T], _: X) { }
+
+func test_autoclosure1(ia: [Int]) {
+  autoclosure1(ia, X()) // okay: resolves to the second function
+}
+
+// rdar://problem/64368545 - failed to produce diagnostic (hole propagated to func result without recording a fix)
+func test_no_hole_propagation() {
+  func test(withArguments arguments: [String]) -> String {
+    return arguments.reduce(0, +) // expected-error {{cannot convert value of type 'Int' to expected argument type 'String'}}
+  }
+}

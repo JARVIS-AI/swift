@@ -1,4 +1,4 @@
-// RUN: %target-sil-opt -assume-parsing-unqualified-ownership-sil %s -dead-store-elim -max-partial-store-count=2 -enable-sil-verify-all | %FileCheck %s
+// RUN: %target-sil-opt %s -dead-store-elim -max-partial-store-count=2 -enable-sil-verify-all | %FileCheck %s
 
 sil_stage canonical
 
@@ -172,6 +172,47 @@ bb0:
   return %4 : $()
 }
 
+// We should be able to remove the local store into alloc_ref [stack] locations
+// that is not read.
+//
+// CHECK-LABEL: trivial_local_dead_store_into_alloc_ref
+// CHECK: bb0
+// CHECK-NOT: {{ store}}
+// CHECK: tuple
+// CHECK: return
+sil hidden @trivial_local_dead_store_into_alloc_ref_stack : $@convention(thin) () -> () {
+bb0:
+  %0 = alloc_ref [stack] $foo
+  %1 = integer_literal $Builtin.Int64, 1
+  %2 = struct $Int (%1 : $Builtin.Int64)
+  %3 = ref_element_addr %0 : $foo, #foo.a
+  store %2 to %3 : $*Int
+  %4 = tuple ()
+  dealloc_ref [stack] %0 : $foo
+  return %4 : $()
+}
+
+// We cannot remove the local store that is potentially read by the deinit of foo.
+//
+// CHECK-LABEL: sil hidden @blocking_read_on_local_store_into_alloc_ref_stack
+// CHECK: bb0
+// CHECK: alloc_ref
+// CHECK: store
+// CHECK: dealloc_ref
+// CHECK: return
+sil hidden @blocking_read_on_local_store_into_alloc_ref_stack : $@convention(thin) () -> () {
+bb0:
+  %0 = alloc_ref [stack] $foo
+  %1 = integer_literal $Builtin.Int64, 1
+  %2 = struct $Int (%1 : $Builtin.Int64)
+  %3 = ref_element_addr %0 : $foo, #foo.a
+  store %2 to %3 : $*Int
+  %4 = tuple ()
+  strong_release %0 : $foo
+  dealloc_ref [stack] %0 : $foo
+  return %4 : $()
+}
+
 // We cannot remove the local store that is read.
 //
 // CHECK-LABEL: blocking_read_on_local_store
@@ -199,10 +240,10 @@ sil @store_after_store : $@convention(thin) (@owned B) -> () {
 bb0(%0 : $B):
   %1 = alloc_box $<τ_0_0> { var τ_0_0 } <B>
   %1a = project_box %1 : $<τ_0_0> { var τ_0_0 } <B>, 0
-  %2 = store %0 to %1a : $*B
-  %3 = store %0 to %1a : $*B
+  store %0 to %1a : $*B
+  store %0 to %1a : $*B
   %4 = tuple()
-  %5 = return %4 : $()
+  return %4 : $()
 }
 
 // CHECK-LABEL: sil @dead_store_elimination_over_noread_builtins
@@ -240,6 +281,29 @@ bb0(%0 : $*Builtin.Int32):
 
 bb1:
   br bb3
+
+bb2:
+  br bb3
+
+bb3:
+  store %1 to %0 : $*Builtin.Int32
+  %9999 = tuple()
+  return %9999 : $()
+}
+
+// CHECK-LABEL: sil @handle_unreachable : $@convention(thin) (@inout Builtin.Int32) -> () {
+// CHECK: bb0
+// CHECK-NEXT: integer_literal
+// CHECK-NEXT: cond_br
+// CHECK: return
+sil @handle_unreachable : $@convention(thin) (@inout Builtin.Int32) -> () {
+bb0(%0 : $*Builtin.Int32):
+  %1 = integer_literal $Builtin.Int32, 0
+  store %1 to %0 : $*Builtin.Int32
+  cond_br undef, bb1, bb2
+
+bb1:
+  unreachable
 
 bb2:
   br bb3
@@ -401,6 +465,24 @@ bb2:
 
 bb3:
   store %0 to %6 : $*Builtin.Int32
+  %9999 = tuple()
+  return %9999 : $()
+}
+
+sil @unknown : $@convention(thin) () -> ()
+
+// CHECK-LABEL: sil @inout_is_not_aliasing : $@convention(thin) (@inout Builtin.Int32) -> () {
+// CHECK: bb0
+// CHECK-NEXT: integer_literal
+// CHECK-NEXT: function_ref
+// CHECK: return
+sil @inout_is_not_aliasing : $@convention(thin) (@inout Builtin.Int32) -> () {
+bb0(%0 : $*Builtin.Int32):
+  %1 = integer_literal $Builtin.Int32, 0
+  store %1 to %0 : $*Builtin.Int32
+  %f = function_ref @unknown : $@convention(thin) () -> ()
+  %3 = apply %f() : $@convention(thin) () -> ()
+  store %1 to %0 : $*Builtin.Int32
   %9999 = tuple()
   return %9999 : $()
 }
@@ -990,7 +1072,7 @@ bb2:
 //
 // CHECK-LABEL: dead_store_inout_stack_alias
 // CHECK: bb0
-// CHECK : struct_element_addr
+// CHECK: struct_element_addr
 // CHECK-NOT: {{ store}}
 // CHECK: load
 sil hidden @dead_store_inout_stack_alias : $@convention(thin) (@inout A) -> () {
@@ -1020,14 +1102,14 @@ bb0(%0 : $*Example):
   %3 = integer_literal $Builtin.Int64, 64
   %4 = struct $Int64 (%3 : $Builtin.Int64)
   %5 = tuple (%2 : $Int64, %4 : $Int64)
-  %6 = enum $Example, #Example.A!enumelt.1, %5 : $(Int64, Int64)
+  %6 = enum $Example, #Example.A!enumelt, %5 : $(Int64, Int64)
   store %6 to %0 : $*Example
   %8 = integer_literal $Builtin.Int64, 64
   %9 = struct $Int64 (%8 : $Builtin.Int64)
   %10 = integer_literal $Builtin.Int64, 64
   %11 = struct $Int64 (%10 : $Builtin.Int64)
   %12 = tuple (%9 : $Int64, %11 : $Int64)
-  %13 = enum $Example, #Example.A!enumelt.1, %12 : $(Int64, Int64)
+  %13 = enum $Example, #Example.A!enumelt, %12 : $(Int64, Int64)
   store %13 to %0 : $*Example
   release_value %6 : $Example
   %16 = integer_literal $Builtin.Int64, 0
@@ -1038,7 +1120,7 @@ bb0(%0 : $*Example):
 
 /// Make sure we can coalesce the 2 live stores to the 2 fields in S4.
 ///
-/// CHECK-LABEL : partial_dead_store_struct_in_struct
+/// CHECK-LABEL: partial_dead_store_struct_in_struct
 /// CHECK: [[RET0:%.+]] = struct_extract
 /// CHECK: [[RET1:%.+]] = struct_element_addr
 /// CHECK: {{ store}} [[RET0:%.+]] to [[RET1:%.+]] : $*S4
@@ -1058,7 +1140,7 @@ bb0(%0 : $*S5):
 
 /// Make sure we do not coalesce the 2 live stores to the 2 fields in S6.
 ///
-/// CHECK-LABEL : sil hidden @discontiguous_partial_dead_store_simple_struct
+/// CHECK-LABEL: sil hidden @discontiguous_partial_dead_store_simple_struct
 /// CHECK: store
 /// CHECK: store
 sil hidden @discontiguous_partial_dead_store_simple_struct : $@convention(thin) (@inout S6) -> () {
@@ -1077,7 +1159,7 @@ bb0(%0 : $*S6):
 
 /// Make sure we generate the store to field x first.
 ///
-/// CHECK-LABEL : sil hidden @discontiguous_partial_dead_store_lives_insert_deterministically
+/// CHECK-LABEL: sil hidden @discontiguous_partial_dead_store_lives_insert_deterministically
 /// CHECK: bb0([[A:%.*]] : $*S6):
 /// CHECK: [[IN:%.*]] = apply
 /// CHECK: [[EXT1:%.*]] = struct_extract [[IN]] : $S6, #S6.x
@@ -1121,7 +1203,7 @@ bb0(%0 : $*S7):
 /// i.e. too many stores generated, but make sure we track the store correctly
 /// so that we can get rid of store %56 to %57 : $*Int.
 ///
-/// CHECK-LABEL : partial_dead_store_bail_out_proper_propagation
+/// CHECK-LABEL: partial_dead_store_bail_out_proper_propagation
 /// CHECK: bb0
 /// CHECK-NOT: {{ store}}
 /// CHECK: function_ref
@@ -1388,4 +1470,52 @@ bb2:
   store %5 to %7 : $*Int
   %14 = tuple ()
   return %14 : $()
+}
+
+// CHECK-LABEL: test_is_unique
+// CHECK: %1 = alloc_stack
+// CHECK: store %0 to %1 
+// CHECK: is_unique
+// CHECK: return
+sil @test_is_unique : $@convention(thin) (@guaranteed AB) -> Builtin.Int1 {
+bb0(%0 : $AB):                     // Preds: bb6 bb5 bb4 bb3
+  %1 = alloc_stack $AB
+  store %0 to %1 : $*AB
+  %2 = is_unique %1 : $*AB
+  dealloc_stack %1 : $*AB
+  return %2 : $Builtin.Int1
+}
+
+// CHECK-LABEL: dont_remove_store
+// CHECK: load
+// CHECK: store
+// CHECK: value_metatype
+// CHECK: return
+sil @dont_remove_store : $@convention(thin) (@in_guaranteed foo) -> () {
+bb0(%0 : $*foo):
+  %1 = alloc_stack $foo
+  %2 = load %0 : $*foo
+  store %2 to %1 : $*foo
+  %3 = value_metatype $@thick foo.Type, %1 : $*foo
+  dealloc_stack %1 : $*foo
+  %20 = tuple()
+  return %20 : $()
+}
+
+// Check that begin_access, end_access, strong_release, set_deallocating, and dealloc_ref don't prevent optimization.
+// CHECK-LABEL: ignore_read_write
+// CHECK: bb0
+// CHECK-NOT: store
+// CHECK-LABEL: end sil function 'ignore_read_write'
+sil @ignore_read_write : $@convention(thin) () -> Int {
+bb0:
+  %1 = alloc_ref [stack] $foo
+  %2 = integer_literal $Builtin.Int64, 0
+  %3 = struct $Int (%2 : $Builtin.Int64)
+  %4 = ref_element_addr %1 : $foo, #foo.a
+  store %3 to %4 : $*Int
+  set_deallocating %1 : $foo
+  dealloc_ref %1 : $foo
+  dealloc_ref [stack] %1 : $foo
+  return %3 : $Int
 }

@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -15,20 +15,27 @@
 //
 //===----------------------------------------------------------------------===//
 #include "TypeChecker.h"
+#include "TypoCorrection.h"
 #include "swift/Basic/Range.h"
+
 using namespace swift;
 
 Optional<Type> TypeChecker::checkObjCKeyPathExpr(DeclContext *dc,
-                                                 ObjCKeyPathExpr *expr,
+                                                 KeyPathExpr *expr,
                                                  bool requireResultType) {
+  // TODO: Native keypaths
+  assert(expr->isObjC() && "native keypaths not type-checked this way");
+  
   // If there is already a semantic expression, do nothing.
-  if (expr->getSemanticExpr() && !requireResultType) return None;
+  if (expr->getObjCStringLiteralExpr() && !requireResultType) return None;
 
-  // #keyPath only makes sense when we have the Objective-C runtime.
+  // ObjC #keyPath only makes sense when we have the Objective-C runtime.
+  auto &Context = dc->getASTContext();
+  auto &diags = Context.Diags;
   if (!Context.LangOpts.EnableObjCInterop) {
-    diagnose(expr->getLoc(), diag::expr_keypath_no_objc_runtime);
+    diags.diagnose(expr->getLoc(), diag::expr_keypath_no_objc_runtime);
 
-    expr->setSemanticExpr(
+    expr->setObjCStringLiteralExpr(
       new (Context) StringLiteralExpr("", expr->getSourceRange(),
                                       /*Implicit=*/true));
     return None;
@@ -67,21 +74,14 @@ Optional<Type> TypeChecker::checkObjCKeyPathExpr(DeclContext *dc,
 
   // The type of AnyObject, which is used whenever we don't have
   // sufficient type information.
-  Type anyObjectType;
-  if (auto anyObject = Context.getProtocol(KnownProtocolKind::AnyObject)) {
-    validateDecl(anyObject);
-    anyObjectType = anyObject->getDeclaredInterfaceType();
-  } else {
-    diagnose(expr->getLoc(), diag::stdlib_anyobject_not_found);
-    return None;
-  }
+  Type anyObjectType = Context.getAnyObjectType();
 
   // Local function to update the state after we've resolved a
   // component.
   Type currentType;
   auto updateState = [&](bool isProperty, Type newType) {
     // Strip off optionals.
-    newType = newType->lookThroughAllAnyOptionalTypes();
+    newType = newType->lookThroughAllOptionalTypes();
 
     // If updating to a type, just set the new type; there's nothing
     // more to do.
@@ -162,13 +162,15 @@ Optional<Type> TypeChecker::checkObjCKeyPathExpr(DeclContext *dc,
   };
   
   // Local function to perform name lookup for the current index.
-  auto performLookup = [&](unsigned idx, Identifier componentName,
+  auto performLookup = [&](DeclNameRef componentName,
                            SourceLoc componentNameLoc,
                            Type &lookupType) -> LookupResult {
     if (state == Beginning)
       return lookupUnqualified(dc, componentName, componentNameLoc);
 
     assert(currentType && "Non-beginning state must have a type");
+    if (!currentType->mayHaveMembers())
+      return LookupResult();
 
     // Determine the type in which the lookup should occur. If we have
     // a bridged value type, this will be the Objective-C class to
@@ -184,26 +186,57 @@ Optional<Type> TypeChecker::checkObjCKeyPathExpr(DeclContext *dc,
 
   // Local function to print a component to the string.
   bool needDot = false;
-  auto printComponent = [&](Identifier component) {
+  auto printComponent = [&](DeclName component) {
     if (needDot)
       keyPathOS << ".";
     else
       needDot = true;
 
-    keyPathOS << component.str();
+    keyPathOS << component;
   };
 
   bool isInvalid = false;
-  for (unsigned idx : range(expr->getNumComponents())) {
-    auto componentName = expr->getComponentName(idx);
-    auto componentNameLoc = expr->getComponentNameLoc(idx);
+  SmallVector<KeyPathExpr::Component, 4> resolvedComponents;
+  
+  for (auto &component : expr->getComponents()) {
+    auto componentNameLoc = component.getLoc();
+    
+    // ObjC keypaths only support named segments.
+    // TODO: Perhaps we can map subscript components to dictionary keys.
+    switch (auto kind = component.getKind()) {
+    case KeyPathExpr::Component::Kind::Invalid:
+    case KeyPathExpr::Component::Kind::Identity:
+      continue;
+
+    case KeyPathExpr::Component::Kind::UnresolvedProperty:
+      break;
+    case KeyPathExpr::Component::Kind::UnresolvedSubscript:
+    case KeyPathExpr::Component::Kind::OptionalChain:
+    case KeyPathExpr::Component::Kind::OptionalForce:
+    case KeyPathExpr::Component::Kind::TupleElement:
+      diags.diagnose(componentNameLoc,
+                     diag::expr_unsupported_objc_key_path_component,
+                     (unsigned)kind);
+      continue;
+    case KeyPathExpr::Component::Kind::OptionalWrap:
+    case KeyPathExpr::Component::Kind::Property:
+    case KeyPathExpr::Component::Kind::Subscript:
+      llvm_unreachable("already resolved!");
+    }
+    
+    auto componentName = component.getUnresolvedDeclName();
+    if (!componentName.isSimpleName()) {
+      diags.diagnose(componentNameLoc,
+                     diag::expr_unsupported_objc_key_path_compound_name);
+      continue;
+    }
 
     // If we are resolving into a dictionary, any component is
     // well-formed because the keys are unknown dynamically.
     if (state == ResolvingDictionary) {
       // Just print the component unchanged; there's no checking we
       // can do here.
-      printComponent(componentName);
+      printComponent(componentName.getBaseName());
 
       // From here, we're resolving a property. Use the current type.
       updateState(/*isProperty=*/true, currentType);
@@ -213,30 +246,29 @@ Optional<Type> TypeChecker::checkObjCKeyPathExpr(DeclContext *dc,
 
     // Look for this component.
     Type lookupType;
-    LookupResult lookup = performLookup(idx, componentName, componentNameLoc,
+    LookupResult lookup = performLookup(componentName, componentNameLoc,
                                         lookupType);
 
     // If we didn't find anything, try to apply typo-correction.
     bool resultsAreFromTypoCorrection = false;
     if (!lookup) {
-      performTypoCorrection(dc, DeclRefKind::Ordinary, lookupType,
-                            componentName, componentNameLoc,
+      TypoCorrectionResults corrections(componentName,
+                                        DeclNameLoc(componentNameLoc));
+      TypeChecker::performTypoCorrection(dc, DeclRefKind::Ordinary, lookupType,
                             (lookupType ? defaultMemberTypeLookupOptions
                                         : defaultUnqualifiedLookupOptions),
-                            lookup);
+                            corrections);
 
       if (currentType)
-        diagnose(componentNameLoc, diag::could_not_find_type_member,
-                 currentType, componentName);
+        diags.diagnose(componentNameLoc, diag::could_not_find_type_member,
+                       currentType, componentName);
       else
-        diagnose(componentNameLoc, diag::use_unresolved_identifier,
-                 componentName, false);
+        diags.diagnose(componentNameLoc, diag::cannot_find_in_scope,
+                       componentName, false);
 
       // Note all the correction candidates.
-      for (auto &result : lookup) {
-        noteTypoCorrection(componentName, DeclNameLoc(componentNameLoc),
-                           result);
-      }
+      corrections.noteAllCandidates();
+      corrections.addAllCandidatesToLookup(lookup);
 
       isInvalid = true;
       if (!lookup) break;
@@ -248,13 +280,14 @@ Optional<Type> TypeChecker::checkObjCKeyPathExpr(DeclContext *dc,
     // If we have more than one result, filter out unavailable or
     // obviously unusable candidates.
     if (lookup.size() > 1) {
-      lookup.filter([&](LookupResult::Result result) -> bool {
+      lookup.filter([&](LookupResultEntry result, bool isOuter) -> bool {
           // Drop unavailable candidates.
-          if (result->getAttrs().isUnavailable(Context))
+          if (result.getValueDecl()->getAttrs().isUnavailable(Context))
             return false;
 
           // Drop non-property, non-type candidates.
-          if (!isa<VarDecl>(result.Decl) && !isa<TypeDecl>(result.Decl))
+          if (!isa<VarDecl>(result.getValueDecl()) &&
+              !isa<TypeDecl>(result.getValueDecl()))
             return false;
 
           return true;
@@ -268,36 +301,53 @@ Optional<Type> TypeChecker::checkObjCKeyPathExpr(DeclContext *dc,
         break;
 
       if (lookupType)
-        diagnose(componentNameLoc, diag::ambiguous_member_overload_set,
-                 componentName);
+        diags.diagnose(componentNameLoc, diag::ambiguous_member_overload_set,
+                       componentName);
       else
-        diagnose(componentNameLoc, diag::ambiguous_decl_ref,
-                 componentName);
+        diags.diagnose(componentNameLoc, diag::ambiguous_decl_ref,
+                       componentName);
 
       for (auto result : lookup) {
-        diagnose(result, diag::decl_declared_here, result->getFullName());
+        diags.diagnose(result.getValueDecl(), diag::decl_declared_here,
+                       result.getValueDecl()->getName());
       }
       isInvalid = true;
       break;
     }
 
-    auto found = lookup.front().Decl;
+    auto found = lookup.front().getValueDecl();
 
     // Handle property references.
     if (auto var = dyn_cast<VarDecl>(found)) {
-      validateDecl(var);
-
       // Resolve this component to the variable we found.
-      expr->resolveComponent(idx, var);
-      updateState(/*isProperty=*/true, var->getType()->getRValueObjectType());
+      auto varRef = ConcreteDeclRef(var);
+      auto resolved =
+        KeyPathExpr::Component::forProperty(varRef, Type(), componentNameLoc);
+      resolvedComponents.push_back(resolved);
+      updateState(/*isProperty=*/true, var->getInterfaceType());
 
       // Check that the property is @objc.
       if (!var->isObjC()) {
-        diagnose(componentNameLoc, diag::expr_keypath_non_objc_property,
-                 componentName);
+        diags.diagnose(componentNameLoc, diag::expr_keypath_non_objc_property,
+                       var->getName());
         if (var->getLoc().isValid() && var->getDeclContext()->isTypeContext()) {
-          diagnose(var, diag::make_decl_objc,
-                   var->getDescriptiveKind())
+          diags.diagnose(var, diag::make_decl_objc,
+                         var->getDescriptiveKind())
+            .fixItInsert(var->getAttributeInsertionLoc(false),
+                         "@objc ");
+        }
+      } else if (auto attr = var->getAttrs().getAttribute<ObjCAttr>()) {
+        // If this attribute was inferred based on deprecated Swift 3 rules,
+        // complain.
+        if (attr->isSwift3Inferred() &&
+            Context.LangOpts.WarnSwift3ObjCInference ==
+              Swift3ObjCInferenceWarnings::Minimal) {
+          auto *parent = var->getDeclContext()->getSelfNominalTypeDecl();
+          diags.diagnose(componentNameLoc,
+                         diag::expr_keypath_swift3_objc_inference,
+                         var->getName(),
+                         parent->getName());
+          diags.diagnose(var, diag::make_decl_objc, var->getDescriptiveKind())
             .fixItInsert(var->getAttributeInsertionLoc(false),
                          "@objc ");
         }
@@ -314,16 +364,16 @@ Optional<Type> TypeChecker::checkObjCKeyPathExpr(DeclContext *dc,
     if (auto type = dyn_cast<TypeDecl>(found)) {
       // We cannot refer to a type via a property.
       if (isResolvingProperty()) {
-        diagnose(componentNameLoc, diag::expr_keypath_type_of_property,
-                 componentName, currentType);
+        diags.diagnose(componentNameLoc, diag::expr_keypath_type_of_property,
+                       componentName, currentType);
         isInvalid = true;
         break;
       }
 
       // We cannot refer to a generic type.
       if (type->getDeclaredInterfaceType()->hasTypeParameter()) {
-        diagnose(componentNameLoc, diag::expr_keypath_generic_type,
-                 componentName);
+        diags.diagnose(componentNameLoc, diag::expr_keypath_generic_type,
+                       type->getName());
         isInvalid = true;
         break;
       }
@@ -331,7 +381,7 @@ Optional<Type> TypeChecker::checkObjCKeyPathExpr(DeclContext *dc,
       Type newType;
       if (lookupType && !lookupType->isAnyObject()) {
         newType = lookupType->getTypeOfMember(dc->getParentModule(), type,
-                                              this);
+                                              type->getDeclaredInterfaceType());
       } else {
         newType = type->getDeclaredInterfaceType();
       }
@@ -345,20 +395,25 @@ Optional<Type> TypeChecker::checkObjCKeyPathExpr(DeclContext *dc,
     }
 
     // Declarations that cannot be part of a key-path.
-    diagnose(componentNameLoc, diag::expr_keypath_not_property,
-             found->getDescriptiveKind(), found->getFullName());
+    diags.diagnose(componentNameLoc, diag::expr_keypath_not_property,
+                   found->getDescriptiveKind(), found->getName(),
+                   /*isForDynamicKeyPathMemberLookup=*/false);
     isInvalid = true;
     break;
   }
+  // A successful check of an ObjC keypath shouldn't add or remove components,
+  // currently.
+  if (resolvedComponents.size() == expr->getComponents().size())
+    expr->resolveComponents(Context, resolvedComponents);
 
   // Check for an empty key-path string.
   auto keyPathString = keyPathOS.str();
   if (keyPathString.empty() && !isInvalid)
-    diagnose(expr->getLoc(), diag::expr_keypath_empty);
+    diags.diagnose(expr->getLoc(), diag::expr_keypath_empty);
 
-  // Set the semantic expression.
-  if (!expr->getSemanticExpr()) {
-    expr->setSemanticExpr(
+  // Set the string literal expression for the ObjC key path.
+  if (!expr->getObjCStringLiteralExpr()) {
+    expr->setObjCStringLiteralExpr(
       new (Context) StringLiteralExpr(Context.AllocateCopy(keyPathString),
                                       expr->getSourceRange(),
                                       /*Implicit=*/true));

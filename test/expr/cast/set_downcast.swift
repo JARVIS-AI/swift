@@ -3,8 +3,8 @@
 class C : Hashable {
 	var x = 0
 
-  var hashValue: Int {
-    return x
+  func hash(into hasher: inout Hasher) {
+    hasher.combine(x)
   }
 }
 
@@ -15,9 +15,7 @@ class D : C {}
 
 // Unrelated to the classes above.
 class U : Hashable { 
-  var hashValue: Int {
-    return 0
-  }
+  func hash(into hasher: inout Hasher) {}
 }
 
 func == (x: U, y: U) -> Bool { return true }
@@ -29,10 +27,10 @@ var setD = Set<D>()
 setD = setC as! Set<D>
 
 // Test set conditional downcasts
-if let setD = setC as? Set<D> { }
+if let _ = setC as? Set<D> { }
 
 // Test set downcasts to unrelated types.
 _ = setC as! Set<U> // expected-warning{{cast from 'Set<C>' to unrelated type 'Set<U>' always fails}}
 
 // Test set conditional downcasts to unrelated types
-if let setU = setC as? Set<U> { } // expected-warning{{cast from 'Set<C>' to unrelated type 'Set<U>' always fails}}
+if let _ = setC as? Set<U> { } // expected-warning{{cast from 'Set<C>' to unrelated type 'Set<U>' always fails}}

@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -14,33 +14,19 @@
 // rdar://problem/19804127
 import TestsUtils
 
-@inline(never)
-public func run_DictionaryRemove(_ N: Int) {
-    let size = 100
-    var dict = [Int: Int](minimumCapacity: size)
+let t: [BenchmarkCategory] = [.validation, .api, .Dictionary]
 
-    // Fill dictionary
-    for i in 1...size {
-        dict[i] = i
-    }
-    CheckResults(dict.count == size,
-                 "Incorrect dict count: \(dict.count) != \(size).")
+let size = 100
+let numberMap = Dictionary(uniqueKeysWithValues: zip(1...size, 1...size))
+let boxedNums = (1...size).lazy.map { Box($0) }
+let boxedNumMap = Dictionary(uniqueKeysWithValues: zip(boxedNums, boxedNums))
 
-    var tmpDict = dict
-    for _ in 1...1000*N {
-        tmpDict = dict
-        // Empty dictionary
-        for i in 1...size {
-            tmpDict.removeValue(forKey: i)
-        }
-        if !tmpDict.isEmpty {
-            break
-        }
-    }
-
-    CheckResults(tmpDict.isEmpty,
-                 "tmpDict should be empty: \(tmpDict.count) != 0.")
-}
+public let DictionaryRemove = [
+  BenchmarkInfo(name: "DictionaryRemove",
+    runFunction: remove, tags: t, legacyFactor: 10),
+  BenchmarkInfo(name: "DictionaryRemoveOfObjects",
+    runFunction: removeObjects, tags: t, legacyFactor: 100),
+]
 
 class Box<T : Hashable> : Hashable {
   var value: T
@@ -49,39 +35,27 @@ class Box<T : Hashable> : Hashable {
     value = v
   }
 
-  var hashValue: Int {
-    return value.hashValue
+  func hash(into hasher: inout Hasher) {
+    hasher.combine(value)
   }
 
-  static func ==<T: Equatable>(lhs: Box<T>, rhs: Box<T>) -> Bool {
+  static func ==(lhs: Box, rhs: Box) -> Bool {
     return lhs.value == rhs.value
   }
 }
 
-@inline(never)
-public func run_DictionaryRemoveOfObjects(_ N: Int) {
-    let size = 100
-    var dict = Dictionary<Box<Int>, Box<Int>>(minimumCapacity: size)
+func remove(N: Int) {
+  for _ in 1...100*N {
+    var dict = numberMap
+    for i in 1...size { dict.removeValue(forKey: i) }
+    CheckResults(dict.isEmpty)
+  }
+}
 
-    // Fill dictionary
-    for i in 1...size {
-        dict[Box(i)] = Box(i)
-    }
-    CheckResults(dict.count == size,
-                 "Incorrect dict count: \(dict.count) != \(size).")
-
-    var tmpDict = dict
-    for _ in 1...1000*N {
-        tmpDict = dict
-        // Empty dictionary
-        for i in 1...size {
-            tmpDict.removeValue(forKey: Box(i))
-        }
-        if !tmpDict.isEmpty {
-            break
-        }
-    }
-
-    CheckResults(tmpDict.isEmpty,
-                 "tmpDict should be empty: \(tmpDict.count) != 0.")
+func removeObjects(N: Int) {
+  for _ in 1...10*N {
+    var dict = boxedNumMap
+    for i in 1...size { dict.removeValue(forKey: Box(i)) }
+    CheckResults(dict.isEmpty)
+  }
 }

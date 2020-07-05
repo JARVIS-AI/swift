@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -13,6 +13,11 @@
 // This test is based on util/benchmarks/RC4, with modifications
 // for performance measuring.
 import TestsUtils
+
+public let RC4Test = BenchmarkInfo(
+  name: "RC4",
+  runFunction: run_RC4,
+  tags: [.validation, .algorithm])
 
 struct RC4 {
   var State : [UInt8]
@@ -99,6 +104,6 @@ public func run_RC4(_ N: Int) {
       Enc.encrypt(&LongData)
     }
 
-    CheckResults(LongData == RefResults, "Incorrect result in RC4")
+    CheckResults(LongData == RefResults)
   }
 }

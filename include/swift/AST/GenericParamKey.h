@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -14,7 +14,7 @@
 #define SWIFT_AST_GENERICPARAMKEY_H
 
 #include "llvm/ADT/DenseMapInfo.h"
-#include "llvm/ADT/ArrayRef.h"
+#include "swift/AST/Type.h"
 
 namespace swift {
 
@@ -90,8 +90,7 @@ struct GenericParamKey {
 
   /// Find the index that this key would have into an array of
   /// generic type parameters
-  unsigned findIndexIn(
-             llvm::ArrayRef<GenericTypeParamType *> genericParams) const;
+  unsigned findIndexIn(TypeArrayView<GenericTypeParamType> genericParams) const;
 };
 
 } // end namespace swift

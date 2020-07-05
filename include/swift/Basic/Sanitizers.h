@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -15,10 +15,10 @@
 
 namespace swift {
 
+// Enabling bitwise masking.
 enum class SanitizerKind : unsigned {
-  None = 0,
-  Address,
-  Thread,
+  #define SANITIZER(enum_bit, kind, name, file) kind = (1 << enum_bit),
+  #include "Sanitizers.def"
 };
 
 } // end namespace swift

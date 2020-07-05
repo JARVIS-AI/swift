@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -50,8 +50,7 @@ class RCIdentityDumper : public SILFunctionTransform {
         Results.push_back({Arg, RCId->getRCIdentityRoot(Arg)});
       }
       for (auto &II : BB) {
-        if (II.hasValue()) {
-          SILValue V(&II);
+        for (auto V : II.getResults()) {
           ValueToValueIDMap[V] = ValueCount++;
           Results.push_back({V, RCId->getRCIdentityRoot(V)});
         }
@@ -73,7 +72,6 @@ class RCIdentityDumper : public SILFunctionTransform {
     llvm::outs() << "\n";
   }
 
-  StringRef getName() override { return "RC Identity Dumper"; }
 };
 
 } // end anonymous namespace

@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -25,23 +25,24 @@ using namespace swift;
 
 static ModRefInfo getConservativeModRefForKind(const llvm::Instruction &I) {
   switch (classifyInstruction(I)) {
-#define KIND(Name, MemBehavior) case RT_ ## Name: return MRI_ ## MemBehavior;
+#define KIND(Name, MemBehavior) case RT_ ## Name: return ModRefInfo:: MemBehavior;
 #include "LLVMSwift.def"
   }
 
   llvm_unreachable("Not a valid Instruction.");
 }
 
-ModRefInfo SwiftAAResult::getModRefInfo(llvm::ImmutableCallSite CS,
-                                        const llvm::MemoryLocation &Loc) {
+ModRefInfo SwiftAAResult::getModRefInfo(const llvm::CallBase *Call,
+                                        const llvm::MemoryLocation &Loc,
+                                        llvm::AAQueryInfo &AAQI) {
   // We know at compile time that certain entry points do not modify any
   // compiler-visible state ever. Quickly check if we have one of those
   // instructions and return if so.
-  if (MRI_NoModRef == getConservativeModRefForKind(*CS.getInstruction()))
-    return MRI_NoModRef;
+  if (ModRefInfo::NoModRef == getConservativeModRefForKind(*Call))
+    return ModRefInfo::NoModRef;
 
   // Otherwise, delegate to the rest of the AA ModRefInfo machinery.
-  return AAResultBase::getModRefInfo(CS, Loc);
+  return AAResultBase::getModRefInfo(Call, Loc, AAQI);
 }
 
 //===----------------------------------------------------------------------===//

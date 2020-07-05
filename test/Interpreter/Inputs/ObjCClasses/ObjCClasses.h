@@ -8,10 +8,17 @@ NS_ASSUME_NONNULL_BEGIN
 /* This class has instance variables which are not apparent in the
    interface.  Subclasses will need to be slid by the ObjC runtime. */
 @interface HasHiddenIvars : NSObject
+- (instancetype)init;
 @property NSInteger x;
 @property NSInteger y;
 @property NSInteger z;
 @property NSInteger t;
+@end
+
+@interface HasHiddenIvars2 : NSObject
+@property id x;
+@property id y;
+@property id z;
 @end
 
 @interface TestingNSError : NSObject
@@ -101,6 +108,14 @@ NS_ASSUME_NONNULL_BEGIN
 @interface TestingBool : NSObject
 - (void) shouldBeTrueObjCBool: (BOOL)value;
 - (void) shouldBeTrueCBool: (_Bool)value;
+@end
+
+@interface OuterType : NSObject
+@end
+
+__attribute__((swift_name("OuterType.InnerType")))
+@interface OuterTypeInnerType : NSObject
+@property NSArray<OuterType *> *things;
 @end
 
 NS_ASSUME_NONNULL_END

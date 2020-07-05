@@ -2,10 +2,10 @@
 
 // REQUIRES: objc_interop
 
-// RUN: rm -rf %t && mkdir -p %t
+// RUN: %empty-directory(%t)
 
 // FIXME: BEGIN -enable-source-import hackaround
-// RUN:  %target-swift-frontend(mock-sdk: -sdk %S/../Inputs/clang-importer-sdk -I %t) -emit-module -o %t %S/../Inputs/clang-importer-sdk/swift-modules/ObjectiveC.swift
+// RUN:  %target-swift-frontend(mock-sdk: -sdk %S/../Inputs/clang-importer-sdk -I %t) -emit-module -o %t %S/../Inputs/clang-importer-sdk/swift-modules/ObjectiveC.swift -disable-objc-attr-requires-foundation-module
 // RUN:  %target-swift-frontend(mock-sdk: -sdk %S/../Inputs/clang-importer-sdk -I %t) -emit-module -o %t  %S/../Inputs/clang-importer-sdk/swift-modules/CoreGraphics.swift
 // RUN:  %target-swift-frontend(mock-sdk: -sdk %S/../Inputs/clang-importer-sdk -I %t) -emit-module -o %t  %S/../Inputs/clang-importer-sdk/swift-modules/Foundation.swift
 // FIXME: END -enable-source-import hackaround
@@ -26,8 +26,18 @@ import Foundation
 // CHECK-NEXT: - (nonnull instancetype)init OBJC_DESIGNATED_INITIALIZER;
 // CHECK-NEXT: @end
 class Test : NSObject {
-  func makeArray(_: ZZStringAlias) -> [ZZStringAlias] { return [] }
-  func usePoint(_: ZZPoint) {}
-  func useAlignment(_: ZZAlignment) {}
-  func useObjects(_: ZZClass) -> [ZZProto] { return [] }
+  @objc func makeArray(_: ZZStringAlias) -> [ZZStringAlias] { return [] }
+  @objc func usePoint(_: ZZPoint) {}
+  @objc func useAlignment(_: ZZAlignment) {}
+  @objc func useObjects(_: ZZClass) -> [ZZProto] { return [] }
 }
+
+@objc
+public enum TestE : Int{
+	@objc(A2)
+	case A1
+	case B1
+}
+// CHECK: typedef SWIFT_ENUM(NSInteger, TestE, closed)
+// CHECK-NEXT: {{^}} A2 SWIFT_COMPILE_NAME("A1") = 0,
+// CHECK-NEXT: {{^}} TestEB1 = 1,

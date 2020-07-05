@@ -137,7 +137,7 @@ struct AnyStream<T : Sequence> {
   }
 }
 
-func enumerate<T : Sequence>(_ arg: T) -> AnyStream<T> {
+func enumerate<T>(_ arg: T) -> AnyStream<T> {
   return AnyStream<T>(input: arg)
 }
 
@@ -192,7 +192,7 @@ class X6<T> {
 // ---------------------------------------------
 // Unbound name references within a generic type
 // ---------------------------------------------
-struct GS<T> {
+struct GS<T> { //expected-note {{arguments to generic parameter 'T' ('T' and 'Int') are expected to be equal}}
   func f() -> GS {
     let gs = GS()
     return gs
@@ -228,7 +228,8 @@ extension GS {
   }
 }
 
-struct HasNested<T> {
+struct HasNested<T> { // expected-note {{arguments to generic parameter 'T' ('Int' and 'Float') are expected to be equal}}
+// expected-note@-1 {{arguments to generic parameter 'T' ('Float' and 'Int') are expected to be equal}}
   init<U>(_ t: T, _ u: U) {}
   func f<U>(_ t: T, u: U) -> (T, U) {}
 
@@ -250,7 +251,7 @@ func useNested(_ ii: Int, hni: HasNested<Int>,
   typealias InnerI = HasNested<Int>.Inner
   var innerI = InnerI(5)
   typealias InnerF = HasNested<Float>.Inner
-  var innerF : InnerF = innerI // expected-error{{cannot convert value of type 'InnerI' (aka 'HasNested<Int>.Inner') to specified type 'InnerF' (aka 'HasNested<Float>.Inner')}}
+  var innerF : InnerF = innerI // expected-error{{cannot convert parent type 'HasNested<Int>' to expected type 'HasNested<Float>'}}
 
   _ = innerI.identity(i)
   i = innerI.identity(i)
@@ -260,17 +261,18 @@ func useNested(_ ii: Int, hni: HasNested<Int>,
   var id = hni.f(1, u: 3.14159)
   id = (2, 3.14159)
   hni.f(1.5, 3.14159) // expected-error{{missing argument label 'u:' in call}}
+  // expected-error@-1 {{cannot convert value of type 'Double' to expected argument type 'Int'}}
   hni.f(1.5, u: 3.14159) // expected-error{{cannot convert value of type 'Double' to expected argument type 'Int'}}
 
   // Generic constructor of a generic struct
   HNI(1, 2.71828) // expected-warning{{unused}}
-  HNI(1.5, 2.71828) // expected-error{{'Double' is not convertible to 'Int'}}
+  HNI(1.5, 2.71828) // expected-error{{cannot convert value of type 'Double' to expected argument type 'Int'}}
 
   // Generic function in a nested generic struct
   var ids = xis.g(1, u: "Hello", v: 3.14159)
   ids = (2, "world", 2.71828)
 
-  xis = xfs // expected-error{{cannot assign value of type 'HasNested<Float>.InnerGeneric<String>' to type 'HasNested<Int>.InnerGeneric<String>'}}
+  xis = xfs // expected-error{{cannot convert parent type 'HasNested<Float>' to expected type 'HasNested<Int>'}}
 }
 
 // Extensions of nested generic types
@@ -298,8 +300,127 @@ extension OuterGeneric.MidGeneric : HasAssocType {
   func takesAssocType(first: D, second: F) {}
 }
 
-typealias OuterGenericMidGeneric<T> = OuterGeneric<T>.MidGeneric
+typealias OuterGenericMidNonGeneric<T> = OuterGeneric<T>.MidNonGeneric
 
-extension OuterGenericMidGeneric {
+extension OuterGenericMidNonGeneric {
 
+}
+
+class BaseClass {
+  struct T {}
+
+  func m1() -> T {}
+  func m2() -> BaseClass.T {}
+  func m3() -> DerivedClass.T {}
+}
+
+func f1() -> DerivedClass.T {
+  return BaseClass.T()
+}
+
+func f2() -> BaseClass.T {
+  return DerivedClass.T()
+}
+
+func f3() -> DerivedClass.T {
+  return DerivedClass.T()
+}
+
+class DerivedClass : BaseClass {
+  override func m1() -> DerivedClass.T {
+    return f2()
+  }
+
+  override func m2() -> BaseClass.T {
+    return f3()
+  }
+
+  override func m3() -> T {
+    return f2()
+  }
+}
+
+// https://bugs.swift.org/browse/SR-3847: Resolve members in inner types.
+// This first extension isn't necessary; we could have put 'originalValue' in
+// the original declaration.
+extension OuterNonGenericClass.InnerNonGenericBase {
+  static let originalValue = 0
+}
+// Each of these two cases used to crash.
+extension OuterNonGenericClass.InnerNonGenericBase {
+  static let propUsingMember = originalValue
+}
+extension OuterNonGenericClass.InnerNonGenericClass1 {
+  static let anotherPropUsingMember = originalValue
+}
+
+// rdar://problem/30353095: Extensions of nested types with generic
+// requirements placed on type parameters
+struct OuterWithConstraint<T : HasAssocType> {
+  struct InnerWithConstraint<U : HasAssocType> { }
+}
+
+extension OuterWithConstraint.InnerWithConstraint {
+  func foo<V>(v: V) where T.FirstAssocType == U.SecondAssocType {}
+}
+
+// Name lookup within a 'where' clause should find generic parameters
+// of the outer type.
+extension OuterGeneric.MidGeneric where D == Int, F == String {
+  func doStuff() -> (D, F) {
+    return (100, "hello")
+  }
+}
+
+// https://bugs.swift.org/browse/SR-4672
+protocol ExpressibleByCatLiteral {}
+protocol ExpressibleByDogLiteral {}
+
+struct Kitten : ExpressibleByCatLiteral {}
+struct Puppy : ExpressibleByDogLiteral {}
+
+struct Claws<A: ExpressibleByCatLiteral> { // expected-note 3 {{'A' declared as parameter to type 'Claws'}}
+  struct Fangs<B: ExpressibleByDogLiteral> { } // expected-note {{where 'B' = 'NotADog'}}
+}
+
+struct NotADog {}
+
+func pets<T>(fur: T) -> Claws<Kitten>.Fangs<T> {
+  return Claws<Kitten>.Fangs<T>()
+}
+
+func something<T>() -> T {
+  while true {}
+}
+
+func test() {
+  let _: Claws<Kitten>.Fangs<Puppy> = pets(fur: Puppy())
+
+  // <https://bugs.swift.org/browse/SR-5600>
+  let _: Claws.Fangs<Puppy> = pets(fur: Puppy())
+  let _: Claws.Fangs<Puppy> = Claws<Kitten>.Fangs()
+  let _: Claws.Fangs<Puppy> = Claws.Fangs()
+  // expected-error@-1 {{generic parameter 'A' could not be inferred}}
+  // expected-note@-2 {{explicitly specify the generic arguments to fix this issue}} {{36-36=<<#A: ExpressibleByCatLiteral#>>}}
+  let _: Claws.Fangs<NotADog> = something()
+  // expected-error@-1 {{generic parameter 'A' could not be inferred}}
+  _ = Claws.Fangs<NotADog>()
+  // expected-error@-1 {{generic parameter 'A' could not be inferred}}
+  // expected-error@-2 {{generic struct 'Fangs' requires that 'NotADog' conform to 'ExpressibleByDogLiteral'}}
+  // expected-note@-3 {{explicitly specify the generic arguments to fix this issue}} {{12-12=<<#A: ExpressibleByCatLiteral#>>}}
+}
+
+// https://bugs.swift.org/browse/SR-4379
+extension OuterGeneric.MidNonGeneric {
+  func doStuff() -> OuterGeneric {
+    return OuterGeneric()
+  }
+
+  func doMoreStuff() -> OuterGeneric.MidNonGeneric {
+    return OuterGeneric.MidNonGeneric()
+  }
+
+  func doMoreStuffWrong() -> Self {
+
+  }
 }

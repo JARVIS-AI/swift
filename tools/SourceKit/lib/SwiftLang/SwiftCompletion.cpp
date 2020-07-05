@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -13,14 +13,19 @@
 #include "CodeCompletionOrganizer.h"
 #include "SwiftASTManager.h"
 #include "SwiftLangSupport.h"
+#include "SwiftEditorDiagConsumer.h"
+#include "SourceKit/Support/FileSystemProvider.h"
 #include "SourceKit/Support/Logging.h"
 #include "SourceKit/Support/UIdent.h"
 
-#include "swift/Basic/Fallthrough.h"
+#include "swift/AST/ASTPrinter.h"
 #include "swift/Frontend/Frontend.h"
 #include "swift/Frontend/PrintingDiagnosticConsumer.h"
 #include "swift/IDE/CodeCompletionCache.h"
+#include "swift/IDE/CodeCompletionResultPrinter.h"
+#include "swift/IDE/CompletionInstance.h"
 
+#include "llvm/Support/Compiler.h"
 #include "llvm/Support/MemoryBuffer.h"
 
 using namespace SourceKit;
@@ -39,7 +44,8 @@ static_assert(swift::ide::CodeCompletionResult::MaxNumBytesToErase == 127,
 namespace {
 struct SwiftToSourceKitCompletionAdapter {
   static bool handleResult(SourceKit::CodeCompletionConsumer &consumer,
-                           CodeCompletionResult *result) {
+                           CodeCompletionResult *result,
+                           bool annotatedDescription) {
     llvm::SmallString<64> name;
     {
       llvm::raw_svector_ostream OSS(name);
@@ -55,23 +61,23 @@ struct SwiftToSourceKitCompletionAdapter {
       // can
       // decide whether to display it or not. For now just include it in the
       // description only in the new code path.
-      CodeCompletion::CompletionBuilder::getDescription(
-          result, OSS, /*leadingPunctuation=*/false);
+      ide::printCodeCompletionResultDescription(*result, OSS,
+                                                /*leadingPunctuation=*/false);
     }
 
     Completion extended(*result, name, description);
     return handleResult(consumer, &extended, /*leadingPunctuation=*/false,
-                        /*legacyLiteralToKeyword=*/true);
+                        /*legacyLiteralToKeyword=*/true, annotatedDescription);
   }
 
   static bool handleResult(SourceKit::CodeCompletionConsumer &consumer,
                            Completion *result, bool leadingPunctuation,
-                           bool legacyLiteralToKeyword);
+                           bool legacyLiteralToKeyword,
+                           bool annotatedDescription);
 
   static void getResultSourceText(const CodeCompletionString *CCStr,
                                   raw_ostream &OS);
-  static void getResultTypeName(const CodeCompletionString *CCStr,
-                                raw_ostream &OS);
+
   static void getResultAssociatedUSRs(ArrayRef<StringRef> AssocUSRs,
                                       raw_ostream &OS);
 };
@@ -87,7 +93,7 @@ struct SwiftCodeCompletionConsumer
       : handleResultsImpl(handleResultsImpl) {}
 
   void setContext(swift::ASTContext *context,
-                  swift::CompilerInvocation *invocation,
+                  const swift::CompilerInvocation *invocation,
                   swift::ide::CodeCompletionContext *completionContext) {
     swiftContext.swiftASTContext = context;
     swiftContext.invocation = invocation;
@@ -97,132 +103,91 @@ struct SwiftCodeCompletionConsumer
 
   void handleResults(MutableArrayRef<CodeCompletionResult *> Results) override {
     assert(swiftContext.swiftASTContext);
-    CodeCompletionContext::sortCompletionResults(Results);
     handleResultsImpl(Results, swiftContext);
   }
 };
 } // anonymous namespace
 
-static bool swiftCodeCompleteImpl(SwiftLangSupport &Lang,
-                                  llvm::MemoryBuffer *UnresolvedInputFile,
-                                  unsigned Offset,
-                                  SwiftCodeCompletionConsumer &SwiftConsumer,
-                                  ArrayRef<const char *> Args,
-                                  std::string &Error) {
-
-  trace::TracedOperation TracedOp;
-  if (trace::enabled()) {
-    trace::SwiftInvocation SwiftArgs;
-    trace::initTraceInfo(SwiftArgs,
-                         UnresolvedInputFile->getBufferIdentifier(),
-                         Args);
-    SwiftArgs.addFile(UnresolvedInputFile->getBufferIdentifier(),
-                      UnresolvedInputFile->getBuffer());
-
-    TracedOp.start(trace::OperationKind::CodeCompletionInit, SwiftArgs,
-                   { std::make_pair("Offset", std::to_string(Offset)),
-                     std::make_pair("InputBufferSize",
-                                    std::to_string(UnresolvedInputFile->getBufferSize()))});
+/// Returns completion context kind \c UIdent to report to the client.
+/// For now, only returns "unresolved member" kind because others are unstable.
+/// Returns invalid \c UIents other cases.
+static UIdent getUIDForCodeCompletionKindToReport(CompletionKind kind) {
+  switch (kind) {
+  case CompletionKind::UnresolvedMember:
+    return UIdent("source.lang.swift.completion.unresolvedmember");
+  default:
+    return UIdent();
   }
-  
-  // Resolve symlinks for the input file; we resolve them for the input files
-  // in the arguments as well.
-  // FIXME: We need the Swift equivalent of Clang's FileEntry.
-  auto InputFile = llvm::MemoryBuffer::getMemBuffer(
-      UnresolvedInputFile->getBuffer(),
-      Lang.resolvePathSymlinks(UnresolvedInputFile->getBufferIdentifier()));
-
-  CompilerInstance CI;
-  // Display diagnostics to stderr.
-  PrintingDiagnosticConsumer PrintDiags;
-  CI.addDiagnosticConsumer(&PrintDiags);
-
-  CompilerInvocation Invocation;
-  bool Failed = Lang.getASTManager().initCompilerInvocation(
-      Invocation, Args, CI.getDiags(), InputFile->getBufferIdentifier(), Error);
-  if (Failed) {
-    return false;
-  }
-  if (Invocation.getInputFilenames().empty()) {
-    Error = "no input filenames specified";
-    return false;
-  }
-
-  auto origBuffSize = InputFile->getBufferSize();
-  unsigned CodeCompletionOffset = Offset;
-  if (CodeCompletionOffset > origBuffSize) {
-    CodeCompletionOffset = origBuffSize;
-  }
-
-  const char *Position = InputFile->getBufferStart() + CodeCompletionOffset;
-  std::unique_ptr<llvm::MemoryBuffer> NewBuffer =
-      llvm::MemoryBuffer::getNewUninitMemBuffer(InputFile->getBufferSize() + 1,
-                                              InputFile->getBufferIdentifier());
-  char *NewBuf = const_cast<char*>(NewBuffer->getBufferStart());
-  char *NewPos = std::copy(InputFile->getBufferStart(), Position, NewBuf);
-  *NewPos = '\0';
-  std::copy(Position, InputFile->getBufferEnd(), NewPos+1);
-
-  Invocation.setCodeCompletionPoint(NewBuffer.get(), CodeCompletionOffset);
-
-  auto swiftCache = Lang.getCodeCompletionCache(); // Pin the cache.
-  ide::CodeCompletionContext CompletionContext(swiftCache->getCache());
-
-  // Create a factory for code completion callbacks that will feed the
-  // Consumer.
-  std::unique_ptr<CodeCompletionCallbacksFactory> CompletionCallbacksFactory(
-      ide::makeCodeCompletionCallbacksFactory(CompletionContext,
-                                              SwiftConsumer));
-
-  Invocation.setCodeCompletionFactory(CompletionCallbacksFactory.get());
-
-  // FIXME: We need to be passing the buffers from the open documents.
-  // It is not a huge problem in practice because Xcode auto-saves constantly.
-
-  if (CI.setup(Invocation)) {
-    // FIXME: error?
-    return true;
-  }
-
-  TracedOp.finish();
-
-  if (trace::enabled()) {
-    trace::SwiftInvocation SwiftArgs;
-    trace::initTraceInfo(SwiftArgs, InputFile->getBufferIdentifier(), Args);
-    trace::initTraceFiles(SwiftArgs, CI);
-
-    // Replace primary file with original content
-    std::for_each(SwiftArgs.Files.begin(), SwiftArgs.Files.end(),
-                  [&] (trace::StringPairs::value_type &Pair) {
-                    if (Pair.first == InputFile->getBufferIdentifier()) {
-                      Pair.second = InputFile->getBuffer();
-                    }
-                  });
-
-    TracedOp.start(trace::OperationKind::CodeCompletion, SwiftArgs,
-                   {std::make_pair("OriginalOffset", std::to_string(Offset)),
-                    std::make_pair("Offset",
-                      std::to_string(CodeCompletionOffset))});
-  }
-
-  CloseClangModuleFiles scopedCloseFiles(
-      *CI.getASTContext().getClangModuleLoader());
-  SwiftConsumer.setContext(&CI.getASTContext(), &Invocation,
-                           &CompletionContext);
-  CI.performSema();
-  SwiftConsumer.clearContext();
-  return true;
 }
 
-void SwiftLangSupport::codeComplete(llvm::MemoryBuffer *UnresolvedInputFile,
-                                    unsigned Offset,
-                                    SourceKit::CodeCompletionConsumer &SKConsumer,
-                                    ArrayRef<const char *> Args) {
+static bool swiftCodeCompleteImpl(
+    SwiftLangSupport &Lang, llvm::MemoryBuffer *UnresolvedInputFile,
+    unsigned Offset, SwiftCodeCompletionConsumer &SwiftConsumer,
+    ArrayRef<const char *> Args,
+    llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> FileSystem,
+    bool EnableASTCaching, bool annotateDescription, std::string &Error) {
+  return Lang.performCompletionLikeOperation(
+      UnresolvedInputFile, Offset, Args, FileSystem, EnableASTCaching, Error,
+      [&](CompilerInstance &CI, bool reusingASTContext) {
+        // Create a factory for code completion callbacks that will feed the
+        // Consumer.
+        auto swiftCache = Lang.getCodeCompletionCache(); // Pin the cache.
+        ide::CodeCompletionContext CompletionContext(swiftCache->getCache());
+        CompletionContext.ReusingASTContext = reusingASTContext;
+        CompletionContext.setAnnotateResult(annotateDescription);
+        std::unique_ptr<CodeCompletionCallbacksFactory> callbacksFactory(
+            ide::makeCodeCompletionCallbacksFactory(CompletionContext,
+                                                    SwiftConsumer));
+
+        SwiftConsumer.setContext(&CI.getASTContext(), &CI.getInvocation(),
+                                 &CompletionContext);
+
+        auto *SF = CI.getCodeCompletionFile();
+        performCodeCompletionSecondPass(*SF, *callbacksFactory);
+        SwiftConsumer.clearContext();
+      });
+}
+
+static void translateCodeCompletionOptions(OptionsDictionary &from,
+                                           CodeCompletion::Options &to,
+                                           StringRef &filterText,
+                                           unsigned &resultOffset,
+                                           unsigned &maxResults);
+
+void SwiftLangSupport::codeComplete(
+    llvm::MemoryBuffer *UnresolvedInputFile, unsigned Offset,
+    OptionsDictionary *options,
+    SourceKit::CodeCompletionConsumer &SKConsumer, ArrayRef<const char *> Args,
+    Optional<VFSOptions> vfsOptions) {
+
+  CodeCompletion::Options CCOpts;
+  if (options) {
+    StringRef filterText;
+    unsigned resultOffset = 0;
+    unsigned maxResults = 0;
+    translateCodeCompletionOptions(*options, CCOpts, filterText, resultOffset,
+                                   maxResults);
+  }
+
+  std::string error;
+  // FIXME: the use of None as primary file is to match the fact we do not read
+  // the document contents using the editor documents infrastructure.
+  auto fileSystem = getFileSystem(vfsOptions, /*primaryFile=*/None, error);
+  if (!fileSystem)
+    return SKConsumer.failed(error);
+
   SwiftCodeCompletionConsumer SwiftConsumer([&](
       MutableArrayRef<CodeCompletionResult *> Results,
       SwiftCompletionInfo &info) {
-    bool hasExpectedType = info.completionContext->HasExpectedTypeRelation;
-    CodeCompletionContext::sortCompletionResults(Results);
+
+    auto kind = getUIDForCodeCompletionKindToReport(
+        info.completionContext->CodeCompletionKind);
+    if (kind.isValid())
+      SKConsumer.setCompletionKind(kind);
+
+    bool hasRequiredType = info.completionContext->typeContextKind == TypeContextKind::Required;
+    if (CCOpts.sortByName)
+      CodeCompletionContext::sortCompletionResults(Results);
     // FIXME: this adhoc filtering should be configurable like it is in the
     // codeCompleteOpen path.
     for (auto *Result : Results) {
@@ -233,7 +198,7 @@ void SwiftLangSupport::codeComplete(llvm::MemoryBuffer *UnresolvedInputFile,
           break;
         case CodeCompletionLiteralKind::ImageLiteral:
         case CodeCompletionLiteralKind::ColorLiteral:
-          if (hasExpectedType &&
+          if (hasRequiredType &&
               Result->getExpectedTypeRelation() <
                   CodeCompletionResult::Convertible)
             continue;
@@ -242,14 +207,20 @@ void SwiftLangSupport::codeComplete(llvm::MemoryBuffer *UnresolvedInputFile,
           continue;
         }
       }
-      if (!SwiftToSourceKitCompletionAdapter::handleResult(SKConsumer, Result))
+      if (!SwiftToSourceKitCompletionAdapter::handleResult(
+              SKConsumer, Result, CCOpts.annotatedDescription))
         break;
     }
+
+    SKConsumer.setReusingASTContext(info.completionContext->ReusingASTContext);
+    SKConsumer.setAnnotatedTypename(info.completionContext->getAnnotateResult());
   });
 
   std::string Error;
   if (!swiftCodeCompleteImpl(*this, UnresolvedInputFile, Offset, SwiftConsumer,
-                             Args, Error)) {
+                             Args, fileSystem,
+                             CCOpts.reuseASTContextIfPossible,
+                             CCOpts.annotatedDescription, Error)) {
     SKConsumer.failed(Error);
   }
 }
@@ -277,6 +248,7 @@ static void getResultStructure(
     auto C = chunks[i];
     if (C.is(ChunkKind::TypeAnnotation) ||
         C.is(ChunkKind::CallParameterClosureType) ||
+        C.is(ChunkKind::CallParameterClosureExpr) ||
         C.is(ChunkKind::Whitespace))
       continue;
 
@@ -284,9 +256,6 @@ static void getResultStructure(
         C.is(ChunkKind::BraceStmtWithCursor) ||
         C.is(ChunkKind::CallParameterBegin))
       break;
-
-    if (C.is(ChunkKind::Equal))
-      isOperator = true;
 
     if (C.hasText())
       textSize += C.getText().size();
@@ -297,9 +266,10 @@ static void getResultStructure(
 
   // The parameters.
   for (; i < chunks.size(); ++i) {
-    auto C = chunks[i];
+    auto &C = chunks[i];
     if (C.is(ChunkKind::TypeAnnotation) ||
         C.is(ChunkKind::CallParameterClosureType) ||
+        C.is(ChunkKind::CallParameterClosureExpr) ||
         C.is(ChunkKind::Whitespace))
       continue;
 
@@ -321,7 +291,8 @@ static void getResultStructure(
       for (; i < chunks.size(); ++i) {
         if (chunks[i].endsPreviousNestedGroup(C.getNestingLevel()))
           break;
-        if (chunks[i].is(ChunkKind::CallParameterClosureType))
+        if (chunks[i].is(ChunkKind::CallParameterClosureType) ||
+            chunks[i].is(ChunkKind::CallParameterClosureExpr))
           continue;
         if (isOperator && chunks[i].is(ChunkKind::CallParameterType))
           continue;
@@ -430,7 +401,8 @@ static UIdent KeywordFuncUID("source.lang.swift.keyword.func");
 
 bool SwiftToSourceKitCompletionAdapter::handleResult(
     SourceKit::CodeCompletionConsumer &Consumer, Completion *Result,
-    bool leadingPunctuation, bool legacyLiteralToKeyword) {
+    bool leadingPunctuation, bool legacyLiteralToKeyword,
+    bool annotatedDescription) {
 
   static UIdent KeywordUID("source.lang.swift.keyword");
   static UIdent PatternUID("source.lang.swift.pattern");
@@ -467,19 +439,24 @@ bool SwiftToSourceKitCompletionAdapter::handleResult(
   unsigned DescBegin = SS.size();
   {
     llvm::raw_svector_ostream ccOS(SS);
-    CodeCompletion::CompletionBuilder::getDescription(
-        Result, ccOS, leadingPunctuation);
+    if (annotatedDescription)
+      ide::printCodeCompletionResultDescriptionAnnotated(*Result, ccOS,
+                                                         leadingPunctuation);
+    else
+      ide::printCodeCompletionResultDescription(*Result, ccOS,
+                                                leadingPunctuation);
   }
   unsigned DescEnd = SS.size();
 
-  if (Result->getName().empty() || DescBegin == DescEnd) {
+  if (DescBegin == DescEnd) {
     LOG_FUNC_SECTION_WARN {
       llvm::SmallString<64> LogMessage;
       llvm::raw_svector_ostream LogMessageOs(LogMessage);
 
-      LogMessageOs << "Code completion result with empty name and/or "
-                      "description was ignored: \n";
-      Result->print(LogMessageOs);
+      LogMessageOs << "Code completion result with empty description "
+                      "was ignored: \n";
+      Result->printPrefix(LogMessageOs);
+      Result->getCompletionString()->print(LogMessageOs);
 
       *Log << LogMessage;
     }
@@ -496,7 +473,10 @@ bool SwiftToSourceKitCompletionAdapter::handleResult(
   unsigned TypeBegin = SS.size();
   {
     llvm::raw_svector_ostream ccOS(SS);
-    getResultTypeName(Result->getCompletionString(), ccOS);
+    if (annotatedDescription)
+      ide::printCodeCompletionResultTypeNameAnnotated(*Result, ccOS);
+    else
+      ide::printCodeCompletionResultTypeName(*Result, ccOS);
   }
   unsigned TypeEnd = SS.size();
 
@@ -542,9 +522,32 @@ bool SwiftToSourceKitCompletionAdapter::handleResult(
     Info.SemanticContext = CCCtxOtherModule; break;
   }
 
+  static UIdent CCTypeRelNotApplicable("source.codecompletion.typerelation.notapplicable");
+  static UIdent CCTypeRelUnknown("source.codecompletion.typerelation.unknown");
+  static UIdent CCTypeRelUnrelated("source.codecompletion.typerelation.unrelated");
+  static UIdent CCTypeRelInvalid("source.codecompletion.typerelation.invalid");
+  static UIdent CCTypeRelConvertible("source.codecompletion.typerelation.convertible");
+  static UIdent CCTypeRelIdentical("source.codecompletion.typerelation.identical");
+
+  switch (Result->getExpectedTypeRelation()) {
+  case CodeCompletionResult::NotApplicable:
+    Info.TypeRelation = CCTypeRelNotApplicable; break;
+  case CodeCompletionResult::Unknown:
+    Info.TypeRelation = CCTypeRelUnknown; break;
+  case CodeCompletionResult::Unrelated:
+    Info.TypeRelation = CCTypeRelUnrelated; break;
+  case CodeCompletionResult::Invalid:
+    Info.TypeRelation = CCTypeRelInvalid; break;
+  case CodeCompletionResult::Convertible:
+    Info.TypeRelation = CCTypeRelConvertible; break;
+  case  CodeCompletionResult::Identical:
+    Info.TypeRelation = CCTypeRelIdentical; break;
+  }
+
   Info.ModuleName = Result->getModuleName();
   Info.DocBrief = Result->getBriefDocComment();
   Info.NotRecommended = Result->isNotRecommended();
+  Info.IsSystem = Result->isSystem();
 
   Info.NumBytesToErase = Result->getNumBytesToErase();
 
@@ -589,13 +592,12 @@ getCodeCompletionLiteralKindForUID(UIdent uid) {
 
 static CodeCompletionKeywordKind
 getCodeCompletionKeywordKindForUID(UIdent uid) {
-#define SIL_KEYWORD(kw)
-#define KEYWORD(kw)                                                            \
-  static UIdent Keyword##kw##UID("source.lang.swift.keyword." #kw);            \
-  if (uid == Keyword##kw##UID) {                                               \
-    return CodeCompletionKeywordKind::kw_##kw;                                 \
+#define SWIFT_KEYWORD(kw) \
+  static UIdent Keyword##kw##UID("source.lang.swift.keyword." #kw); \
+  if (uid == Keyword##kw##UID) { \
+    return CodeCompletionKeywordKind::kw_##kw; \
   }
-#include "swift/Parse/Tokens.def"
+#include "swift/Syntax/TokenKinds.def"
 
   // FIXME: should warn about unexpected keyword kind.
   return CodeCompletionKeywordKind::None;
@@ -611,22 +613,40 @@ static void constructTextForCallParam(
 
   for (; !ParamGroup.empty(); ParamGroup = ParamGroup.slice(1)) {
     auto &C = ParamGroup.front();
+    if (C.isAnnotation())
+      continue;
     if (C.is(ChunkKind::CallParameterInternalName) ||
-        C.is(ChunkKind::CallParameterType)) {
+        C.is(ChunkKind::CallParameterType) ||
+        C.is(ChunkKind::CallParameterTypeBegin) ||
+        C.is(ChunkKind::CallParameterClosureExpr)) {
       break;
     }
-    if (!C.isAnnotation() && C.hasText()) {
-      OS << C.getText();
-    }
+    if (!C.hasText())
+      continue;
+    OS << C.getText();
   }
 
   SmallString<32> DisplayString;
   SmallString<32> TypeString;
   SmallString<32> ExpansionTypeString;
 
-  for (auto &C : ParamGroup) {
-    if (C.isAnnotation() || !C.hasText())
+  for (auto i = ParamGroup.begin(), e = ParamGroup.end(); i != e; ++i) {
+    auto &C = *i;
+    if (C.is(ChunkKind::CallParameterTypeBegin)) {
+      assert(TypeString.empty());
+      auto nestingLevel = C.getNestingLevel();
+      ++i;
+      for (; i != e; ++i) {
+        if (i->endsPreviousNestedGroup(nestingLevel))
+          break;
+        if (!i->isAnnotation() && i->hasText()) {
+          TypeString += i->getText();
+          DisplayString += i->getText();
+        }
+      }
+      --i;
       continue;
+    }
     if (C.is(ChunkKind::CallParameterClosureType)) {
       assert(ExpansionTypeString.empty());
       ExpansionTypeString = C.getText();
@@ -636,6 +656,17 @@ static void constructTextForCallParam(
       assert(TypeString.empty());
       TypeString = C.getText();
     }
+    if (C.is(ChunkKind::CallParameterClosureExpr)) {
+      // We have a closure expression, so provide it directly instead of in
+      // a placeholder.
+      OS << "{";
+      if (!C.getText().empty())
+        OS << " " << C.getText();
+      OS << "\n" << getCodePlaceholder() << "\n}";
+      return;
+    }
+    if (C.isAnnotation() || !C.hasText())
+      continue;
     DisplayString += C.getText();
   }
 
@@ -662,7 +693,7 @@ void SwiftToSourceKitCompletionAdapter::getResultSourceText(
   for (size_t i = 0; i < Chunks.size(); ++i) {
     auto &C = Chunks[i];
     if (C.is(ChunkKind::BraceStmtWithCursor)) {
-      OS << " {\n<#code#>\n}";
+      OS << " {\n" << getCodePlaceholder() << "\n}";
       continue;
     }
     if (C.is(ChunkKind::CallParameterBegin)) {
@@ -675,16 +706,13 @@ void SwiftToSourceKitCompletionAdapter::getResultSourceText(
       --i;
       continue;
     }
-    if (!C.isAnnotation() && C.hasText()) {
-      OS << C.getText();
+    if (C.is(ChunkKind::TypeAnnotationBegin)) {
+      // Skip type annotation structure.
+      auto level = C.getNestingLevel();
+      do { ++i; } while (i != Chunks.size() && !Chunks[i].endsPreviousNestedGroup(level));
+      --i;
     }
-  }
-}
-
-void SwiftToSourceKitCompletionAdapter::getResultTypeName(
-    const CodeCompletionString *CCStr, raw_ostream &OS) {
-  for (auto C : CCStr->getChunks()) {
-    if (C.getKind() == CodeCompletionString::Chunk::ChunkKind::TypeAnnotation) {
+    if (!C.isAnnotation() && C.hasText()) {
       OS << C.getText();
     }
   }
@@ -721,13 +749,21 @@ ArrayRef<std::string> CodeCompletion::SessionCache::getCompilerArgs() {
   llvm::sys::ScopedLock L(mtx);
   return args;
 }
+llvm::IntrusiveRefCntPtr<llvm::vfs::FileSystem> CodeCompletion::SessionCache::getFileSystem() {
+  llvm::sys::ScopedLock L(mtx);
+  return fileSystem;
+}
 CompletionKind CodeCompletion::SessionCache::getCompletionKind() {
   llvm::sys::ScopedLock L(mtx);
   return completionKind;
 }
-bool CodeCompletion::SessionCache::getCompletionHasExpectedTypes() {
+TypeContextKind CodeCompletion::SessionCache::getCompletionTypeContextKind() {
   llvm::sys::ScopedLock L(mtx);
-  return completionHasExpectedTypes;
+  return typeContextKind;
+}
+bool CodeCompletion::SessionCache::getCompletionMayUseImplicitMemberExpr() {
+  llvm::sys::ScopedLock L(mtx);
+  return completionMayUseImplicitMemberExpr;
 }
 const CodeCompletion::FilterRules &
 CodeCompletion::SessionCache::getFilterRules() {
@@ -781,7 +817,7 @@ public:
   bool handleResult(Completion *result) override {
     return SwiftToSourceKitCompletionAdapter::handleResult(
         consumer, result, /*leadingPunctuation=*/true,
-        /*legacyLiteralToKeyword=*/false);
+        /*legacyLiteralToKeyword=*/false, /*annotatedDescription=*/false);
   }
   void startGroup(StringRef name) override {
     static UIdent GroupUID("source.lang.swift.codecomplete.group");
@@ -811,11 +847,15 @@ static void translateCodeCompletionOptions(OptionsDictionary &from,
   static UIdent KeyAddInnerResults("key.codecomplete.addinnerresults");
   static UIdent KeyAddInnerOperators("key.codecomplete.addinneroperators");
   static UIdent KeyAddInitsToTopLevel("key.codecomplete.addinitstotoplevel");
+  static UIdent KeyCallPatternHeuristics("key.codecomplete.callpatternheuristics");
   static UIdent KeyFuzzyMatching("key.codecomplete.fuzzymatching");
   static UIdent KeyTopNonLiteral("key.codecomplete.showtopnonliteralresults");
   static UIdent KeyContextWeight("key.codecomplete.sort.contextweight");
   static UIdent KeyFuzzyWeight("key.codecomplete.sort.fuzzyweight");
   static UIdent KeyPopularityBonus("key.codecomplete.sort.popularitybonus");
+  static UIdent KeyReuseASTContext("key.codecomplete.reuseastcontext");
+  static UIdent KeyAnnotatedDescription("key.codecomplete.annotateddescription");
+
   from.valueForOption(KeySortByName, to.sortByName);
   from.valueForOption(KeyUseImportDepth, to.useImportDepth);
   from.valueForOption(KeyGroupOverloads, to.groupOverloads);
@@ -832,12 +872,15 @@ static void translateCodeCompletionOptions(OptionsDictionary &from,
   from.valueForOption(KeyAddInnerResults, to.addInnerResults);
   from.valueForOption(KeyAddInnerOperators, to.addInnerOperators);
   from.valueForOption(KeyAddInitsToTopLevel, to.addInitsToTopLevel);
+  from.valueForOption(KeyCallPatternHeuristics, to.callPatternHeuristics);
   from.valueForOption(KeyFuzzyMatching, to.fuzzyMatching);
   from.valueForOption(KeyContextWeight, to.semanticContextWeight);
   from.valueForOption(KeyFuzzyWeight, to.fuzzyMatchWeight);
   from.valueForOption(KeyPopularityBonus, to.popularityBonus);
   from.valueForOption(KeyHideByName, to.hideByNameStyle);
   from.valueForOption(KeyTopNonLiteral, to.showTopNonLiteralResults);
+  from.valueForOption(KeyReuseASTContext, to.reuseASTContextIfPossible);
+  from.valueForOption(KeyAnnotatedDescription, to.annotatedDescription);
 }
 
 /// Canonicalize a name that is in the format of a reference to a function into
@@ -865,13 +908,12 @@ static bool canonicalizeFilterName(const char *origName,
         if (next == ':' || next == ')')
           continue;
       }
-      SWIFT_FALLTHROUGH;
+      LLVM_FALLTHROUGH;
     default:
       Result.push_back(curr);
       continue;
     }
   }
-  llvm_unreachable("exit is on null byte");
 }
 
 static void translateFilterRules(ArrayRef<FilterRule> rawFilterRules,
@@ -887,7 +929,12 @@ static void translateFilterRules(ArrayRef<FilterRule> rawFilterRules,
         // Note: name is null-terminated.
         if (canonicalizeFilterName(name.data(), canonName))
           continue;
-        filterRules.hideByName[canonName] = rule.hide;
+        filterRules.hideByFilterName[canonName] = rule.hide;
+      }
+      break;
+    case FilterRule::Description:
+      for (auto name : rule.names) {
+        filterRules.hideByDescription[name] = rule.hide;
       }
       break;
     case FilterRule::Module:
@@ -955,13 +1002,19 @@ filterInnerResults(ArrayRef<Result *> results, bool includeInner,
     if (!includeInnerOperators && result->isOperator())
       continue;
 
-    llvm::SmallString<64> name;
+    llvm::SmallString<64> filterName;
     {
-      llvm::raw_svector_ostream OSS(name);
+      llvm::raw_svector_ostream OSS(filterName);
       CodeCompletion::CompletionBuilder::getFilterName(
           result->getCompletionString(), OSS);
     }
-    if (rules.hideCompletion(result, name))
+    llvm::SmallString<64> description;
+    {
+      llvm::raw_svector_ostream OSS(description);
+      ide::printCodeCompletionResultDescription(*result, OSS,
+                                                /*leadingPunctuation=*/false);
+    }
+    if (rules.hideCompletion(result, filterName, description))
       continue;
 
     bool inner = checkInnerResult(result, hasDot, hasQDot, hasInit);
@@ -989,7 +1042,8 @@ static void transformAndForwardResults(
     CodeCompletion::SwiftResult paren(
         CodeCompletion::SwiftResult::ResultKind::BuiltinOperator,
         SemanticContextKind::ExpressionSpecific,
-        exactMatch ? exactMatch->getNumBytesToErase() : 0, completionString);
+        exactMatch ? exactMatch->getNumBytesToErase() : 0, completionString,
+        CodeCompletionResult::ExpectedTypeRelation::NotApplicable);
 
     SwiftCompletionInfo info;
     std::vector<Completion *> extended =
@@ -1017,7 +1071,7 @@ static void transformAndForwardResults(
 
   CodeCompletion::CodeCompletionOrganizer organizer(
       options, session->getCompletionKind(),
-      session->getCompletionHasExpectedTypes());
+      session->getCompletionTypeContextKind());
 
   auto &rules = session->getFilterRules();
 
@@ -1027,6 +1081,12 @@ static void transformAndForwardResults(
   if (!hasEarlyInnerResults) {
     organizer.addCompletionsWithFilter(session->getSortedCompletions(),
                                        filterText, rules, exactMatch);
+    // Add leading dot?
+    if (options.addInnerOperators && !rules.hideFilterName(".") &&
+        session->getCompletionMayUseImplicitMemberExpr()) {
+      organizer.addCompletionsWithFilter(
+          buildDot(), filterText, CodeCompletion::FilterRules(), exactMatch);
+    }
   }
 
   if (hasEarlyInnerResults &&
@@ -1040,11 +1100,11 @@ static void transformAndForwardResults(
                            options.addInnerOperators, hasDot, hasQDot, hasInit,
                            rules);
     if (options.addInnerOperators) {
-      if (hasInit && !rules.hideName("("))
+      if (hasInit && !rules.hideFilterName("("))
         innerResults.insert(innerResults.begin(), buildParen());
-      if (hasDot && !rules.hideName("."))
+      if (hasDot && !rules.hideFilterName("."))
         innerResults.insert(innerResults.begin(), buildDot());
-      if (hasQDot && !rules.hideName("?."))
+      if (hasQDot && !rules.hideFilterName("?."))
         innerResults.insert(innerResults.begin(), buildQDot());
     }
 
@@ -1063,6 +1123,9 @@ static void transformAndForwardResults(
     SwiftCodeCompletionConsumer swiftConsumer([&](
         MutableArrayRef<CodeCompletionResult *> results,
         SwiftCompletionInfo &info) {
+      auto *context = info.completionContext;
+      if (!context || context->CodeCompletionKind != CompletionKind::PostfixExpr)
+        return;
       auto topResults = filterInnerResults(results, options.addInnerResults,
                                            options.addInnerOperators, hasDot,
                                            hasQDot, hasInit, rules);
@@ -1074,7 +1137,7 @@ static void transformAndForwardResults(
     });
 
     auto *inputBuf = session->getBuffer();
-    std::string str = inputBuf->getBuffer().slice(0, offset);
+    std::string str = inputBuf->getBuffer().slice(0, offset).str();
     {
       llvm::raw_string_ostream OSS(str);
       SwiftToSourceKitCompletionAdapter::getResultSourceText(
@@ -1089,17 +1152,19 @@ static void transformAndForwardResults(
       cargs.push_back(arg.c_str());
     std::string error;
     if (!swiftCodeCompleteImpl(lang, buffer.get(), str.size(), swiftConsumer,
-                               cargs, error)) {
+                               cargs, session->getFileSystem(),
+                               options.reuseASTContextIfPossible,
+                               options.annotatedDescription, error)) {
       consumer.failed(error);
       return;
     }
 
     if (options.addInnerOperators) {
-      if (hasInit && !rules.hideName("("))
+      if (hasInit && !rules.hideFilterName("("))
         innerResults.insert(innerResults.begin(), buildParen());
-      if (hasDot && !rules.hideName("."))
+      if (hasDot && !rules.hideFilterName("."))
         innerResults.insert(innerResults.begin(), buildDot());
-      if (hasQDot && !rules.hideName("?."))
+      if (hasQDot && !rules.hideFilterName("?."))
         innerResults.insert(innerResults.begin(), buildQDot());
     }
 
@@ -1128,7 +1193,8 @@ static void transformAndForwardResults(
 void SwiftLangSupport::codeCompleteOpen(
     StringRef name, llvm::MemoryBuffer *inputBuf, unsigned offset,
     OptionsDictionary *options, ArrayRef<FilterRule> rawFilterRules,
-    GroupedCodeCompletionConsumer &consumer, ArrayRef<const char *> args) {
+    GroupedCodeCompletionConsumer &consumer, ArrayRef<const char *> args,
+    Optional<VFSOptions> vfsOptions) {
   StringRef filterText;
   unsigned resultOffset = 0;
   unsigned maxResults = 0;
@@ -1136,6 +1202,13 @@ void SwiftLangSupport::codeCompleteOpen(
   if (options)
     translateCodeCompletionOptions(*options, CCOpts, filterText, resultOffset,
                                    maxResults);
+
+  std::string error;
+  // FIXME: the use of None as primary file is to match the fact we do not read
+  // the document contents using the editor documents infrastructure.
+  auto fileSystem = getFileSystem(vfsOptions, /*primaryFile=*/None, error);
+  if (!fileSystem)
+    return consumer.failed(error);
 
   CodeCompletion::FilterRules filterRules;
   translateFilterRules(rawFilterRules, filterRules);
@@ -1152,26 +1225,38 @@ void SwiftLangSupport::codeCompleteOpen(
   }
 
   CompletionKind completionKind = CompletionKind::None;
-  bool hasExpectedTypes = false;
+  TypeContextKind typeContextKind = TypeContextKind::None;
+  bool mayUseImplicitMemberExpr = false;
 
   SwiftCodeCompletionConsumer swiftConsumer(
       [&](MutableArrayRef<CodeCompletionResult *> results,
           SwiftCompletionInfo &info) {
-        completionKind = info.completionContext->CodeCompletionKind;
-        hasExpectedTypes = info.completionContext->HasExpectedTypeRelation;
+        auto &completionCtx = *info.completionContext;
+        completionKind = completionCtx.CodeCompletionKind;
+        typeContextKind = completionCtx.typeContextKind;
+        mayUseImplicitMemberExpr = completionCtx.MayUseImplicitMemberExpr;
+        consumer.setReusingASTContext(completionCtx.ReusingASTContext);
+        consumer.setAnnotatedTypename(completionCtx.getAnnotateResult());
         completions =
             extendCompletions(results, sink, info, nameToPopularity, CCOpts);
       });
 
   // Add any codecomplete.open specific flags.
   std::vector<const char *> extendedArgs(args.begin(), args.end());
-  if (CCOpts.addInitsToTopLevel)
+  if (CCOpts.addInitsToTopLevel) {
+    extendedArgs.push_back("-Xfrontend");
     extendedArgs.push_back("-code-complete-inits-in-postfix-expr");
+  }
+  if (CCOpts.callPatternHeuristics) {
+    extendedArgs.push_back("-Xfrontend");
+    extendedArgs.push_back("-code-complete-call-pattern-heuristics");
+  }
 
   // Invoke completion.
-  std::string error;
   if (!swiftCodeCompleteImpl(*this, inputBuf, offset, swiftConsumer,
-                             extendedArgs, error)) {
+                             extendedArgs, fileSystem,
+                             CCOpts.reuseASTContextIfPossible,
+                             CCOpts.annotatedDescription, error)) {
     consumer.failed(error);
     return;
   }
@@ -1191,8 +1276,9 @@ void SwiftLangSupport::codeCompleteOpen(
       inputBuf->getBuffer(), inputBuf->getBufferIdentifier());
   std::vector<std::string> argsCopy(extendedArgs.begin(), extendedArgs.end());
   SessionCacheRef session{new SessionCache(
-      std::move(sink), std::move(bufferCopy), std::move(argsCopy),
-      completionKind, hasExpectedTypes, std::move(filterRules))};
+      std::move(sink), std::move(bufferCopy), std::move(argsCopy), fileSystem,
+      completionKind, typeContextKind, mayUseImplicitMemberExpr,
+      std::move(filterRules))};
   session->setSortedCompletions(std::move(completions));
 
   if (!CCSessions.set(name, offset, session)) {
@@ -1259,9 +1345,9 @@ SwiftCompletionCache::~SwiftCompletionCache() {}
 
 void SwiftLangSupport::codeCompleteCacheOnDisk(StringRef path) {
   ThreadSafeRefCntPtr<SwiftCompletionCache> newCache(new SwiftCompletionCache);
-  newCache->onDisk = llvm::make_unique<ide::OnDiskCodeCompletionCache>(path);
+  newCache->onDisk = std::make_unique<ide::OnDiskCodeCompletionCache>(path);
   newCache->inMemory =
-      llvm::make_unique<ide::CodeCompletionCache>(newCache->onDisk.get());
+      std::make_unique<ide::CodeCompletionCache>(newCache->onDisk.get());
 
   CCCache = newCache; // replace the old cache.
 }

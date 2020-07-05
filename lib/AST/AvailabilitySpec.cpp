@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -26,7 +26,8 @@ SourceRange AvailabilitySpec::getSourceRange() const {
     return cast<PlatformVersionConstraintAvailabilitySpec>(this)->getSourceRange();
 
  case AvailabilitySpecKind::LanguageVersionConstraint:
-   return cast<LanguageVersionConstraintAvailabilitySpec>(this)->getSourceRange();
+ case AvailabilitySpecKind::PackageDescriptionVersionConstraint:
+   return cast<PlatformAgnosticVersionConstraintAvailabilitySpec>(this)->getSourceRange();
 
   case AvailabilitySpecKind::OtherPlatform:
     return cast<OtherPlatformAvailabilitySpec>(this)->getSourceRange();
@@ -54,13 +55,18 @@ void PlatformVersionConstraintAvailabilitySpec::print(raw_ostream &OS,
                     << ')';
 }
 
-SourceRange LanguageVersionConstraintAvailabilitySpec::getSourceRange() const {
-  return SourceRange(SwiftLoc, VersionSrcRange.End);
+SourceRange PlatformAgnosticVersionConstraintAvailabilitySpec::getSourceRange() const {
+  return SourceRange(PlatformAgnosticNameLoc, VersionSrcRange.End);
 }
 
-void LanguageVersionConstraintAvailabilitySpec::print(raw_ostream &OS,
+void PlatformAgnosticVersionConstraintAvailabilitySpec::print(raw_ostream &OS,
                                                       unsigned Indent) const {
-  OS.indent(Indent) << '(' << "language_version_constraint_availability_spec"
+  OS.indent(Indent) << '('
+                    << "platform_agnostic_version_constraint_availability_spec"
+                    << " kind='"
+                    << (isLanguageVersionSpecific() ?
+                         "swift" : "package_description")
+                    << "'"
                     << " version='" << getVersion() << "'"
                     << ')';
 }

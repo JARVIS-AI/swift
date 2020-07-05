@@ -12,10 +12,8 @@ public extension _ObjectiveCBridgeable {
   }
 }
 
-class Root : Hashable { 
-  var hashValue: Int {
-    return 0
-  }
+class Root : Hashable {
+  func hash(into hasher: inout Hasher) {}
 }
 
 func ==(x: Root, y: Root) -> Bool { return true }
@@ -42,9 +40,7 @@ struct BridgedToObjC : Hashable, _ObjectiveCBridgeable {
     return true
   }
 
-  var hashValue: Int {
-    return 0
-  }
+  func hash(into hasher: inout Hasher) {}
 }
 
 func ==(x: BridgedToObjC, y: BridgedToObjC) -> Bool { return true }
@@ -83,12 +79,20 @@ func testUpcastBridge() {
   dictBO = dictBB as [BridgedToObjC: ObjC]
   dictOB = dictBB as [ObjC: BridgedToObjC]
 
-  dictBB = dictBO // expected-error{{cannot assign value of type 'Dictionary<BridgedToObjC, ObjC>' to type 'Dictionary<BridgedToObjC, BridgedToObjC>'}}
-  dictBB = dictOB // expected-error{{cannot assign value of type 'Dictionary<ObjC, BridgedToObjC>' to type 'Dictionary<BridgedToObjC, BridgedToObjC>'}}
+  dictBB = dictBO // expected-error{{cannot assign value of type '[BridgedToObjC : ObjC]' to type '[BridgedToObjC : BridgedToObjC]'}}
+  // expected-note@-1 {{arguments to generic parameter 'Value' ('ObjC' and 'BridgedToObjC') are expected to be equal}}
+  dictBB = dictOB // expected-error{{cannot assign value of type '[ObjC : BridgedToObjC]' to type '[BridgedToObjC : BridgedToObjC]'}}
+  // expected-note@-1 {{arguments to generic parameter 'Key' ('ObjC' and 'BridgedToObjC') are expected to be equal}}
 
-  dictDO = dictBB // expected-error{{cannot assign value of type 'Dictionary<BridgedToObjC, BridgedToObjC>' to type 'Dictionary<DerivesObjC, ObjC>'}}
-  dictOD = dictBB // expected-error{{cannot assign value of type 'Dictionary<BridgedToObjC, BridgedToObjC>' to type 'Dictionary<ObjC, DerivesObjC>'}}
-  dictDD = dictBB // expected-error{{cannot assign value of type 'Dictionary<BridgedToObjC, BridgedToObjC>' to type 'Dictionary<DerivesObjC, DerivesObjC>'}}
+  dictDO = dictBB // expected-error{{cannot assign value of type '[BridgedToObjC : BridgedToObjC]' to type '[DerivesObjC : ObjC]'}}
+  //expected-note@-1 {{arguments to generic parameter 'Key' ('BridgedToObjC' and 'DerivesObjC') are expected to be equal}}
+  //expected-note@-2 {{arguments to generic parameter 'Value' ('BridgedToObjC' and 'ObjC') are expected to be equal}}
+  dictOD = dictBB // expected-error {{cannot assign value of type '[BridgedToObjC : BridgedToObjC]' to type '[ObjC : DerivesObjC]'}}
+  //expected-note@-1 {{arguments to generic parameter 'Key' ('BridgedToObjC' and 'ObjC') are expected to be equal}}
+  //expected-note@-2 {{arguments to generic parameter 'Value' ('BridgedToObjC' and 'DerivesObjC') are expected to be equal}}
+  dictDD = dictBB // expected-error {{cannot assign value of type '[BridgedToObjC : BridgedToObjC]' to type '[DerivesObjC : DerivesObjC]'}}
+  //expected-note@-1 {{arguments to generic parameter 'Key' ('BridgedToObjC' and 'DerivesObjC') are expected to be equal}}
+  //expected-note@-2 {{arguments to generic parameter 'Value' ('BridgedToObjC' and 'DerivesObjC') are expected to be equal}}
   
   _ = dictDD; _ = dictDO; _ = dictOD; _ = dictOO; _ = dictOR; _ = dictOR; _ = dictRR; _ = dictRO
 }
@@ -119,7 +123,7 @@ func testDowncastBridge() {
   _ = dictOB as Dictionary<BridgedToObjC, BridgedToObjC>
 
   // We don't do mixed down/upcasts.
-  _ = dictDO as! Dictionary<BridgedToObjC, BridgedToObjC> // expected-warning{{forced cast from 'Dictionary<DerivesObjC, ObjC>' to 'Dictionary<BridgedToObjC, BridgedToObjC>' always succeeds; did you mean to use 'as'?}}
+  _ = dictDO as! Dictionary<BridgedToObjC, BridgedToObjC> // expected-warning{{forced cast from '[DerivesObjC : ObjC]' to 'Dictionary<BridgedToObjC, BridgedToObjC>' always succeeds; did you mean to use 'as'?}}
 }
 
 func testConditionalDowncastBridge() {
@@ -149,7 +153,7 @@ func testConditionalDowncastBridge() {
 
   // Mixed down/upcasts.
   if let d = dictDO as? Dictionary<BridgedToObjC, BridgedToObjC> { _ = d }
-  // expected-warning@-1{{conditional cast from 'Dictionary<DerivesObjC, ObjC>' to 'Dictionary<BridgedToObjC, BridgedToObjC>' always succeeds}}
+  // expected-warning@-1{{conditional cast from '[DerivesObjC : ObjC]' to 'Dictionary<BridgedToObjC, BridgedToObjC>' always succeeds}}
 
   _ = dictRR
   _ = dictRO

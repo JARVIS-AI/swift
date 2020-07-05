@@ -1,6 +1,6 @@
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -17,6 +17,7 @@ protocol BooleanProtocol {
 extension Bool : BooleanProtocol {
   var boolValue: Bool { return self }
 }
-func f<T : BooleanProtocol>(_ b: T) {
-}
-f(true as BooleanProtocol) // expected-error {{cannot invoke 'f' with an argument list of type '(BooleanProtocol)'}} // expected-note {{expected an argument list of type '(T)'}}
+func f<T : BooleanProtocol>(_ b: T) {}
+// expected-note@-1 {{required by global function 'f' where 'T' = 'BooleanProtocol'}}
+
+f(true as BooleanProtocol) // expected-error {{protocol 'BooleanProtocol' as a type cannot conform to the protocol itself; only concrete types such as structs, enums and classes can conform to protocols}}

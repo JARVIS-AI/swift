@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -13,10 +13,11 @@
 #include "swift/SILOptimizer/Analysis/BasicCalleeAnalysis.h"
 
 #include "swift/AST/Decl.h"
-#include "swift/Basic/Fallthrough.h"
+#include "swift/AST/ProtocolConformance.h"
 #include "swift/Basic/Statistic.h"
 #include "swift/SIL/SILModule.h"
-#include "swift/SILOptimizer/Utils/Local.h"
+#include "swift/SILOptimizer/Utils/InstOptUtils.h"
+#include "llvm/Support/Compiler.h"
 
 #include <algorithm>
 
@@ -24,12 +25,38 @@
 
 using namespace swift;
 
-bool CalleeList::allCalleesVisible() {
+void CalleeList::dump() const {
+  print(llvm::errs());
+}
+
+void CalleeList::print(llvm::raw_ostream &os) const {
+  os << "Incomplete callee list? : "
+               << (isIncomplete() ? "Yes" : "No");
+  if (!allCalleesVisible())
+    os <<", not all callees visible";
+  os << '\n';
+  os << "Known callees:\n";
+  for (auto *CalleeFn : *this) {
+    os << "  " << CalleeFn->getName() << "\n";
+  }
+  os << "\n";
+}
+
+bool CalleeList::allCalleesVisible() const {
   if (isIncomplete())
     return false;
 
   for (SILFunction *Callee : *this) {
     if (Callee->isExternalDeclaration())
+      return false;
+    // Do not consider functions in other modules (libraries) because of library
+    // evolution: such function may behave differently in future/past versions
+    // of the library.
+    // TODO: exclude functions which are deserialized from modules in the same
+    // resilience domain.
+    if (Callee->isAvailableExternally() &&
+        // shared_external functions are always emitted in the client.
+        Callee->getLinkage() != SILLinkage::SharedExternal)
       return false;
   }
   return true;
@@ -54,8 +81,7 @@ void CalleeCache::sortAndUniqueCallees() {
 
 CalleeCache::CalleesAndCanCallUnknown &
 CalleeCache::getOrCreateCalleesForMethod(SILDeclRef Decl) {
-  auto *AFD = cast<AbstractFunctionDecl>(Decl.getDecl());
-  auto Found = TheCache.find(AFD);
+  auto Found = TheCache.find(Decl);
   if (Found != TheCache.end())
     return Found->second;
 
@@ -66,41 +92,51 @@ CalleeCache::getOrCreateCalleesForMethod(SILDeclRef Decl) {
 
   bool Inserted;
   CacheType::iterator It;
-  std::tie(It, Inserted) = TheCache.insert(std::make_pair(AFD, Entry));
+  std::tie(It, Inserted) = TheCache.insert(std::make_pair(Decl, Entry));
   assert(Inserted && "Expected new entry to be inserted!");
 
   return It->second;
 }
 
-/// Update the callees for each method of a given class, along with
-/// all the overridden methods from superclasses.
-void CalleeCache::computeClassMethodCalleesForClass(ClassDecl *CD) {
-  assert(!CD->hasClangNode());
+/// Update the callees for each method of a given vtable.
+void CalleeCache::computeClassMethodCallees() {
+  SmallPtrSet<AbstractFunctionDecl *, 16> unknownCallees;
 
-  for (auto *Member : CD->getMembers()) {
-    auto *AFD = dyn_cast<AbstractFunctionDecl>(Member);
-    if (!AFD)
-      continue;
+  // First mark all method declarations which might be overridden in another
+  // translation unit, i.e. outside the visibility of the optimizer.
+  // This is a little bit more complicated than to just check the VTable
+  // entry.Method itself, because an overridden method might be more accessible
+  // than the base method (e.g. a public method overrides a private method).
+  for (auto &VTable : M.getVTables()) {
+    assert(!VTable->getClass()->hasClangNode());
 
-    auto Method = SILDeclRef(AFD);
-    auto *CalledFn = M.lookUpFunctionInVTable(CD, Method);
-    if (!CalledFn)
-      continue;
+    for (Decl *member : VTable->getClass()->getMembers()) {
+      if (auto *afd = dyn_cast<AbstractFunctionDecl>(member)) {
+        // If a method implementation might be overridden in another translation
+        // unit, also mark all the base methods as 'unknown'.
+        bool unknown = false;
+        do {
+          if (!calleesAreStaticallyKnowable(M, afd))
+            unknown = true;
+          if (unknown)
+            unknownCallees.insert(afd);
+          afd = afd->getOverriddenDecl();
+        } while (afd);
+      }
+    }
+  }
 
-    bool canCallUnknown = !calleesAreStaticallyKnowable(M, Method);
-
-    // Update the callees for this method and all the methods it
-    // overrides by adding this function to their lists.
-    do {
-      auto &TheCallees = getOrCreateCalleesForMethod(Method);
-      assert(TheCallees.getPointer() && "Unexpected null callees!");
-
-      TheCallees.getPointer()->push_back(CalledFn);
-      if (canCallUnknown)
-        TheCallees.setInt(true);
-
-      Method = Method.getNextOverriddenVTableEntry();
-    } while (Method);
+  // Second step: collect all implementations of a method.
+  for (auto &VTable : M.getVTables()) {
+    for (const SILVTable::Entry &entry : VTable->getEntries()) {
+      if (auto *afd = entry.getMethod().getAbstractFunctionDecl()) {
+        CalleesAndCanCallUnknown &callees =
+            getOrCreateCalleesForMethod(entry.getMethod());
+        if (unknownCallees.count(afd) != 0)
+          callees.setInt(1);
+        callees.getPointer()->push_back(entry.getImplementation());
+      }
+    }
   }
 }
 
@@ -123,9 +159,38 @@ void CalleeCache::computeWitnessMethodCalleesForWitnessTable(
 
     TheCallees.getPointer()->push_back(WitnessFn);
 
-    // FIXME: For now, conservatively assume that unknown functions
-    //        can be called from any witness_method call site.
-    TheCallees.setInt(true);
+    // If we can't resolve the witness, conservatively assume it can call
+    // anything.
+    if (!Requirement.getDecl()->isProtocolRequirement() ||
+        !WT.getConformance()->hasWitness(Requirement.getDecl())) {
+      TheCallees.setInt(true);
+      continue;
+    }
+
+    bool canCallUnknown = false;
+
+    auto Conf = WT.getConformance();
+    switch (Conf->getProtocol()->getEffectiveAccess()) {
+      case AccessLevel::Open:
+        llvm_unreachable("protocols cannot have open access level");
+      case AccessLevel::Public:
+        canCallUnknown = true;
+        break;
+      case AccessLevel::Internal:
+        if (!M.isWholeModule()) {
+          canCallUnknown = true;
+          break;
+        }
+        LLVM_FALLTHROUGH;
+      case AccessLevel::FilePrivate:
+      case AccessLevel::Private: {
+        auto Witness = Conf->getWitness(Requirement.getDecl());
+        auto DeclRef = SILDeclRef(Witness.getDecl());
+        canCallUnknown = !calleesAreStaticallyKnowable(M, DeclRef);
+      }
+    }
+    if (canCallUnknown)
+      TheCallees.setInt(true);
   }
 }
 
@@ -133,8 +198,8 @@ void CalleeCache::computeWitnessMethodCalleesForWitnessTable(
 /// Witness Table.
 void CalleeCache::computeMethodCallees() {
   SWIFT_FUNC_STAT;
-  for (auto &VTable : M.getVTableList())
-    computeClassMethodCalleesForClass(VTable.getClass());
+
+  computeClassMethodCallees();
 
   for (auto &WTable : M.getWitnessTableList())
     computeWitnessMethodCalleesForWitnessTable(WTable);
@@ -154,7 +219,7 @@ CalleeCache::getSingleCalleeForWitnessMethod(WitnessMethodInst *WMI) const {
 
 // Look up the precomputed callees for an abstract function and
 // return it as a CalleeList.
-CalleeList CalleeCache::getCalleeList(AbstractFunctionDecl *Decl) const {
+CalleeList CalleeCache::getCalleeList(SILDeclRef Decl) const {
   auto Found = TheCache.find(Decl);
   if (Found == TheCache.end())
     return CalleeList();
@@ -172,15 +237,13 @@ CalleeList CalleeCache::getCalleeList(WitnessMethodInst *WMI) const {
 
   // Otherwise see if we previously computed the callees based on
   // witness tables.
-  auto *Decl = cast<AbstractFunctionDecl>(WMI->getMember().getDecl());
-  return getCalleeList(Decl);
+  return getCalleeList(WMI->getMember());
 }
 
 // Return a callee list for a given class method.
 CalleeList CalleeCache::getCalleeList(ClassMethodInst *CMI) const {
   // Look for precomputed callees based on vtables.
-  auto *Decl = cast<AbstractFunctionDecl>(CMI->getMember().getDecl());
-  return getCalleeList(Decl);
+  return getCalleeList(CMI->getMember());
 }
 
 // Return the list of functions that can be called via the given callee.
@@ -191,12 +254,13 @@ CalleeList CalleeCache::getCalleeListForCalleeKind(SILValue Callee) const {
            "Unhandled method instruction in callee determination!");
     return CalleeList();
 
-  case ValueKind::ThinToThickFunctionInst:
-    Callee = cast<ThinToThickFunctionInst>(Callee)->getOperand();
-    SWIFT_FALLTHROUGH;
-
   case ValueKind::FunctionRefInst:
-    return CalleeList(cast<FunctionRefInst>(Callee)->getReferencedFunction());
+    return CalleeList(
+        cast<FunctionRefInst>(Callee)->getInitiallyReferencedFunction());
+
+  case ValueKind::DynamicFunctionRefInst:
+  case ValueKind::PreviousDynamicFunctionRefInst:
+    return CalleeList(); // Don't know the dynamic target.
 
   case ValueKind::PartialApplyInst:
     return getCalleeListForCalleeKind(
@@ -209,7 +273,8 @@ CalleeList CalleeCache::getCalleeListForCalleeKind(SILValue Callee) const {
     return getCalleeList(cast<ClassMethodInst>(Callee));
 
   case ValueKind::SuperMethodInst:
-  case ValueKind::DynamicMethodInst:
+  case ValueKind::ObjCMethodInst:
+  case ValueKind::ObjCSuperMethodInst:
     return CalleeList();
   }
 }
@@ -217,7 +282,7 @@ CalleeList CalleeCache::getCalleeListForCalleeKind(SILValue Callee) const {
 // Return the list of functions that can be called via the given apply
 // site.
 CalleeList CalleeCache::getCalleeList(FullApplySite FAS) const {
-  return getCalleeListForCalleeKind(FAS.getCallee());
+  return getCalleeListForCalleeKind(FAS.getCalleeOrigin());
 }
 
 // Return the list of functions that can be called via the given instruction.
@@ -226,13 +291,30 @@ CalleeList CalleeCache::getCalleeList(SILInstruction *I) const {
   assert((isa<StrongReleaseInst>(I) || isa<ReleaseValueInst>(I)) &&
          "A deallocation instruction expected");
   auto Ty = I->getOperand(0)->getType();
-  while (Ty.getSwiftRValueType()->getAnyOptionalObjectType())
-    Ty = M.Types.getLoweredType(Ty.getSwiftRValueType()
-                                    ->getAnyOptionalObjectType()
-                                    .getCanonicalTypeOrNull());
-  auto Class = Ty.getSwiftRValueType().getClassOrBoundGenericClass();
-  if (!Class || Class->hasClangNode() || !Class->hasDestructor())
+  while (auto payloadTy = Ty.getOptionalObjectType())
+    Ty = payloadTy;
+  auto Class = Ty.getClassOrBoundGenericClass();
+  if (!Class || Class->hasClangNode())
     return CalleeList();
-  auto Destructor = Class->getDestructor();
+  SILDeclRef Destructor = SILDeclRef(Class->getDestructor());
   return getCalleeList(Destructor);
+}
+
+void BasicCalleeAnalysis::dump() const {
+  print(llvm::errs());
+}
+
+void BasicCalleeAnalysis::print(llvm::raw_ostream &os) const {
+  if (!Cache) {
+    os << "<no cache>\n";
+  }
+  llvm::DenseSet<SILDeclRef> printed;
+  for (auto &VTable : M.getVTables()) {
+    for (const SILVTable::Entry &entry : VTable->getEntries()) {
+      if (printed.insert(entry.getMethod()).second) {
+        os << "callees for " << entry.getMethod() << ":\n";
+        Cache->getCalleeList(entry.getMethod()).print(os);
+      }
+    }
+  }
 }

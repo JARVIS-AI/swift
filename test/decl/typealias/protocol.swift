@@ -3,8 +3,8 @@
 // Tests for typealias inside protocols
 
 protocol Bad {
-  associatedtype X<T>  // expected-error {{associated types may not have a generic parameter list}}
-  typealias Y<T>       // expected-error {{expected '=' in typealias declaration}}
+  associatedtype X<T>  // expected-error {{associated types must not have a generic parameter list}}
+  typealias Y<T>       // expected-error {{expected '=' in type alias declaration}}
 }
 
 protocol Col {
@@ -93,6 +93,28 @@ struct OneIntSeq: MySeq, MyIterator {
   }
 }
 
+protocol MyIntIterator {
+  typealias Elem = Int
+}
+
+struct MyIntSeq : MyIterator, MyIntIterator {
+  func next() -> Elem? {
+    return 0
+  }
+}
+
+protocol MyIntIterator2 {}
+
+extension MyIntIterator2 {
+  typealias Elem = Int
+}
+
+struct MyIntSeq2 : MyIterator, MyIntIterator2 {
+  func next() -> Elem? {
+    return 0
+  }
+}
+
 // test for conformance correctness using typealias in extension
 extension MySeq {
   func first() -> Elem {
@@ -100,7 +122,8 @@ extension MySeq {
   }
 }
 
-// Specific diagnosis for trying to use complex typealiases in generic constraints
+// Typealiases whose underlying type is a structural type written in terms of
+// associated types
 protocol P1 {
     associatedtype A
     typealias F = (A) -> ()
@@ -115,21 +138,19 @@ func go3<T : P1, U : P2>(_ x: T) -> U where T.F == U.B {
 
 // Specific diagnosis for things that look like Swift 2.x typealiases
 protocol P3 {
-  typealias T // expected-error {{typealias is missing an assigned type; use 'associatedtype' to define an associated type requirement}}
-  typealias U : P2 // expected-error {{typealias is missing an assigned type; use 'associatedtype' to define an associated type requirement}}
-
-  associatedtype V : P2 = // expected-error {{expected type in associatedtype declaration}}
+  typealias T // expected-error {{type alias is missing an assigned type; use 'associatedtype' to define an associated type requirement}}
+  typealias U : P2 // expected-error {{type alias is missing an assigned type; use 'associatedtype' to define an associated type requirement}}
 }
 
 // Test for not crashing on recursive aliases
 protocol Circular {
-  typealias Y = Self.Y // expected-error {{type alias 'Y' is not a member type of 'Self'}}
+  typealias Y = Self.Y // expected-error {{type alias 'Y' references itself}} expected-note {{while resolving type 'Self.Y'}}
 
-  typealias Y2 = Y2 // expected-error {{type alias 'Y2' references itself}}
-  // expected-note@-1 {{type declared here}}
+  typealias Y2 = Y2 // expected-error {{type alias 'Y2' references itself}} expected-note {{while resolving type 'Y2'}}
 
-  typealias Y3 = Y4 // expected-note {{type declared here}}
-  typealias Y4 = Y3 // expected-error {{type alias 'Y3' references itself}}
+  typealias Y3 = Y4 // expected-error {{type alias 'Y3' references itself}} expected-note {{while resolving type 'Y4'}}
+
+  typealias Y4 = Y3 // expected-note {{through reference here}} expected-note {{while resolving type 'Y3'}}
 }
 
 // Qualified and unqualified references to protocol typealiases from concrete type
@@ -151,24 +172,25 @@ struct T5 : P5 {
   var a: P5.T1 // OK
 
   // Invalid -- cannot represent associated type of existential
-  var v2: P5.T2 // expected-error {{typealias 'T2' can only be used with a concrete type or generic parameter base}}
-  var v3: P5.X // expected-error {{typealias 'X' can only be used with a concrete type or generic parameter base}}
+  var v2: P5.T2 // expected-error {{type alias 'T2' can only be used with a concrete type or generic parameter base}}
+  var v3: P5.X // expected-error {{type alias 'X' can only be used with a concrete type or generic parameter base}}
 
-  // FIXME: Unqualified reference to typealias from a protocol conformance
-  var v4: T1 // expected-error {{use of undeclared type 'T1'}}
-  var v5: T2 // expected-error {{use of undeclared type 'T2'}}
+  // Unqualified reference to typealias from a protocol conformance
+  var v4: T1 // OK
+  var v5: T2 // OK
 
   // Qualified reference
   var v6: T5.T1 // OK
   var v7: T5.T2 // OK
 
   var v8 = P6.A.self
-  var v9 = P6.B.self // expected-error {{typealias 'B' can only be used with a concrete type or generic parameter base}}
+  var v9 = P6.B.self // expected-error {{type alias 'B' can only be used with a concrete type or generic parameter base}}
 }
 
-// Unqualified lookup finds typealiases in protocol extensions, though
+// Unqualified lookup finds typealiases in protocol extensions
 protocol P7 {
   associatedtype A
+  typealias Z = A
 }
 
 extension P7 {
@@ -178,11 +200,13 @@ extension P7 {
 struct S7 : P7 {
   typealias A = Int
 
-  // FIXME
-  func inTypeContext(y: Y) // expected-error {{use of undeclared type 'Y'}}
+  func inTypeContext(y: Y) { }
 
   func inExpressionContext() {
     _ = Y.self
+    _ = Z.self
+    _ = T5.T1.self
+    _ = T5.T2.self
   }
 }
 
@@ -194,3 +218,100 @@ protocol P8 {
 }
 
 func testP8<T: P8>(_: T) where T.A == Int { } // expected-error{{'A' has been renamed to 'B'}}{{34-35=B}}
+
+// Associated type resolution via lookup should find typealiases in protocol extensions
+protocol Edible {
+  associatedtype Snack
+}
+
+protocol CandyWrapper {
+  associatedtype Wrapped
+}
+
+extension CandyWrapper where Wrapped : Edible {
+  typealias Snack = Wrapped.Snack
+}
+
+struct Candy {}
+
+struct CandyBar : CandyWrapper {
+  typealias Wrapped = CandyEdible
+}
+
+struct CandyEdible : Edible {
+  typealias Snack = Candy
+}
+
+// Edible.Snack is witnessed by 'typealias Snack' inside the
+// constrained extension of CandyWrapper above
+extension CandyBar : Edible {}
+
+protocol P9 {
+  typealias A = Int
+}
+
+func testT9a<T: P9, U>(_: T, _: U) where T.A == U { } // expected-error {{same-type requirement makes generic parameter 'U' non-generic}}
+func testT9b<T: P9>(_: T) where T.A == Float { } // expected-error{{generic signature requires types 'T.A' (aka 'Int') and 'Float' to be the same}}
+
+
+struct X<T> { }
+
+protocol P10 {
+  associatedtype A
+  typealias T = Int
+
+  @available(*, deprecated, message: "just use Int, silly")
+  typealias V = Int
+}
+
+extension P10 {
+  typealias U = Float
+}
+
+extension P10 where T == Int { } // expected-warning{{neither type in same-type constraint ('Self.T' (aka 'Int') or 'Int') refers to a generic parameter or associated type}}
+
+extension P10 where A == X<T> { }
+
+extension P10 where A == X<U> { }
+
+extension P10 where A == X<Self.U> { }
+
+extension P10 where V == Int { } // expected-warning 2{{'V' is deprecated: just use Int, silly}}
+// expected-warning@-1{{neither type in same-type constraint ('Self.V' (aka 'Int') or 'Int') refers to a generic parameter or associated type}}
+
+// rdar://problem/36003312
+protocol P11 {
+  typealias A = Y11
+}
+
+struct X11<T: P11> { }
+struct Y11: P11 { }
+
+extension P11 {
+  func foo(_: X11<Self.A>) { }
+}
+
+// Ordering issue
+struct SomeConformingType : UnboundGenericAliasProto {
+  func f(_: G<Int>) {}
+}
+
+protocol UnboundGenericAliasProto {
+  typealias G = X
+}
+
+// If pre-checking cannot resolve a member type due to ambiguity,
+// we go down the usual member access path. Make sure its correct
+// for protocol typealiases.
+protocol Amb1 {
+  typealias T = Int
+}
+
+protocol Amb2 {
+  typealias T = String
+}
+
+typealias Amb = Amb1 & Amb2
+
+let _: Int.Type = Amb.T.self
+let _: String.Type = Amb.T.self

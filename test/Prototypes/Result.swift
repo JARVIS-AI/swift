@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -138,8 +138,8 @@ func mayFail(_ fail: Bool) throws -> Int {
 print(catchResult { try mayFail(true) })
 print(catchResult { try mayFail(false) })
 
-print(catchResult { _ in 1 }.flatMap { _ in Result(success: 4) }.flatMap { _ in Result<String>(error: Icky.Poor) })
-print(catchResult { _ in 1 }.map { _ in three }.flatMap {$0} )
+print(catchResult { 1 }.flatMap { _ in Result(success: 4) }.flatMap { _ in Result<String>(error: Icky.Poor) })
+print(catchResult { 1 }.map { _ in three }.flatMap {$0} )
 
 let results = [three, nasty, four]
 print(results.flatMap { $0.success })

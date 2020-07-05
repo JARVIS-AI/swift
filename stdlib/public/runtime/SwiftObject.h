@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -28,11 +28,17 @@
 
 
 #if SWIFT_OBJC_INTEROP
+#if __OBJC__
+
+// Source code: "SwiftObject"
+// Real class name: mangled "Swift._SwiftObject"
+#define SwiftObject _TtCs12_SwiftObject
 
 #if __has_attribute(objc_root_class)
 __attribute__((__objc_root_class__))
 #endif
 SWIFT_RUNTIME_EXPORT @interface SwiftObject<NSObject> {
+ @private
   Class isa;
   SWIFT_HEAPOBJECT_NON_OBJC_MEMBERS;
 }
@@ -57,29 +63,33 @@ SWIFT_RUNTIME_EXPORT @interface SwiftObject<NSObject> {
 - (BOOL)conformsToProtocol:(Protocol *)aProtocol;
 
 - (BOOL)respondsToSelector:(SEL)aSelector;
++ (BOOL)instancesRespondToSelector:(SEL)aSelector;
+- (IMP)methodForSelector:(SEL)aSelector;
++ (IMP)instanceMethodForSelector:(SEL)aSelector;
 
 - (instancetype)retain;
 - (oneway void)release;
 - (instancetype)autorelease;
 - (NSUInteger)retainCount;
 
-- (NSString *)description;
-- (NSString *)debugDescription;
+- (id /* NSString */)description;
+- (id /* NSString */)debugDescription;
 @end
 
 namespace swift {
 
-struct String { void *x, *y, *z; };
-
-/// Helper from the standard library for stringizing an arbitrary object.
-extern "C" SWIFT_CC(swift)
-void swift_getSummary(String *out, OpaqueValue *value, const Metadata *T);
-
-// Convert a Swift String to an NSString.
-NSString *convertStringToNSString(String *swiftString);
+id getDescription(OpaqueValue *value, const Metadata *type);
 
 }
 
 #endif
+#endif
+
+namespace swift {
+
+/// Get the NSObject metadata.
+const Metadata *getNSObjectMetadata();
+
+}
 
 #endif

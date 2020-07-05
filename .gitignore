@@ -22,8 +22,11 @@
 #==============================================================================#
 # Explicit files to ignore (only matches one).
 #==============================================================================#
+Brewfile.lock.json
 cscope.files
 cscope.out
+.vimrc
+tags
 
 #==============================================================================#
 # Directories to ignore (do not add trailing '/'s, they skip symlinks).
@@ -33,6 +36,12 @@ docs/_build
 
 # Finder metadata
 .DS_Store
+
+# Visual Studio metadata
+.vs
+
+# clangd
+.clangd
 
 #==============================================================================#
 # Ignore CMake temporary files
@@ -45,3 +54,12 @@ CMakeFiles
 # Ignore compile database
 #==============================================================================#
 compile_commands.json
+
+# Ignore generated GYB files until we fix the workaround on Windows
+#==============================================================================#
+8
+4
+SortedCFDatabase.def
+htmlcov
+.coverage
+/benchmark/scripts/Benchmark_Driverc

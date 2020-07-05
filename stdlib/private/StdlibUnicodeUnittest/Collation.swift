@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -13,7 +13,7 @@
 import StdlibUnittest
 
 struct CollationTableEntry {
-  let scalars: [UnicodeScalar]
+  let scalars: [Unicode.Scalar]
   let collationElements: [UInt64]
   let comment: String
 
@@ -22,7 +22,7 @@ struct CollationTableEntry {
     _ collationElements: [UInt64],
     _ comment: String
   ) {
-    self.scalars = scalars.map { UnicodeScalar($0)! }
+    self.scalars = scalars.map { Unicode.Scalar($0)! }
     self.collationElements = collationElements
     self.comment = comment
   }
@@ -181,42 +181,11 @@ let ducetExtractData: [CollationTableEntry] = [
   CollationTableEntry([0xE01EF], [0x0000_0000_0000], "VARIATION SELECTOR-256"),
 ]
 
-public struct HashableArray<Element : Hashable> : Hashable {
-  internal var _elements: [Element]
-
-  public init(_ elements: [Element]) {
-    _elements = elements
-  }
-
-  public var hashValue: Int {
-    // FIXME: this is a bad approach to combining hash values.
-    var result = 0
-    for x in _elements {
-      result ^= x.hashValue
-      result = result &* 997
-    }
-    return result
-  }
-}
-
-public func == <Element>(
-  lhs: HashableArray<Element>,
-  rhs: HashableArray<Element>
-) -> Bool {
-  return lhs._elements.elementsEqual(rhs._elements)
-}
-
-extension HashableArray : ExpressibleByArrayLiteral {
-  public init(arrayLiteral elements: Element...) {
-    self._elements = elements
-  }
-}
-
-let ducetExtract: [HashableArray<UnicodeScalar> : CollationTableEntry] = {
+let ducetExtract: [[Unicode.Scalar]: CollationTableEntry] = {
   () in
-  var result: [HashableArray<UnicodeScalar> : CollationTableEntry] = [:]
+  var result: [[Unicode.Scalar]: CollationTableEntry] = [:]
   for entry in ducetExtractData {
-    result[HashableArray(entry.scalars)] = entry
+    result[entry.scalars] = entry
   }
   return result
 }()
@@ -232,7 +201,7 @@ extension String {
   internal var _collationElements: [UInt64] {
     var result: [UInt64] = []
     for us in self.unicodeScalars {
-      let scalars: HashableArray<UnicodeScalar> = [us]
+      let scalars: [Unicode.Scalar] = [us]
       let collationElements = ducetExtract[scalars]!.collationElements
       if collationElements[0] != 0 {
         result += collationElements
@@ -338,13 +307,13 @@ public struct StringComparisonTest {
 
 public func sortKey(forCollationElements ces: [UInt64]) -> ([UInt16], [UInt16], [UInt16]) {
   func L1(_ ce: UInt64) -> UInt16 {
-    return UInt16(truncatingBitPattern: ce >> 32)
+    return UInt16(truncatingIfNeeded: ce &>> 32)
   }
   func L2(_ ce: UInt64) -> UInt16 {
-    return UInt16(truncatingBitPattern: ce >> 16)
+    return UInt16(truncatingIfNeeded: ce &>> 16)
   }
   func L3(_ ce: UInt64) -> UInt16 {
-    return UInt16(truncatingBitPattern: ce)
+    return UInt16(truncatingIfNeeded: ce)
   }
 
   var result1: [UInt16] = []

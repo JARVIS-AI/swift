@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -16,11 +16,17 @@
 import Foundation
 import TestsUtils
 
+public let DictionaryBridge = BenchmarkInfo(
+  name: "DictionaryBridge",
+  runFunction: run_DictionaryBridge,
+  tags: [.validation, .api, .Dictionary, .bridging])
+
+#if _runtime(_ObjC)
 class Thing : NSObject {
 
   required override init() {
     let c = type(of: self).col()
-    CheckResults(c!.count == 10, "The rules of the universe apply")
+    CheckResults(c!.count == 10)
   }
 
   private class func col() -> [String : AnyObject]? {
@@ -50,10 +56,15 @@ class Stuff {
 
   }
 }
+#endif
 
 @inline(never)
 public func run_DictionaryBridge(_ N: Int) {
+#if _runtime(_ObjC)
     for _ in 1...100*N {
+      autoreleasepool {
         _ = Stuff()
+      }
     }
+#endif
 }

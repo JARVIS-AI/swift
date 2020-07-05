@@ -7,13 +7,14 @@
 from gyb_stdlib_support import (
     TRAVERSALS,
     collectionForTraversal,
-    sliceTypeName
+    collectionTypeName,
 )
 
 import itertools
 
 class TestParameters(object):
   name = ''
+  ref_name = ''
   base = ''
   traversal = ''
   mutable = False
@@ -31,11 +32,12 @@ def all_tests():
     test.base_kind = base_kind
     test.mutable = mutable
     test.range_replaceable = range_replaceable
-    test.base = base_kind + sliceTypeName(
+    test.base = base_kind + collectionTypeName(
       traversal=traversal,
       mutable=mutable,
-      rangeReplaceable=range_replaceable).replace('Slice', 'Collection')
+      rangeReplaceable=range_replaceable)
     test.name = test.base + '.swift'
+    test.ref_name = test.base + 'OfRef.swift'
     yield test
 
 def test_methods(test):
@@ -68,6 +70,10 @@ def test_methods(test):
 
 // RUN: %target-run-simple-swift
 // REQUIRES: executable_test
+
+// FIXME: the test is too slow when the standard library is not optimized.
+// rdar://problem/46878013
+// REQUIRES: optimized_stdlib
 
 import StdlibUnittest
 import StdlibCollectionUnittest
@@ -106,6 +112,29 @@ do {
   )
 % end
 }
+
+runAllTests()
+
+
+// BEGIN ${test.ref_name}
+// -*- swift -*-
+
+//===----------------------------------------------------------------------===//
+// Automatically Generated From validation-test/stdlib/Collection/Inputs/Template.swift.gyb
+// Do Not Edit Directly!
+//===----------------------------------------------------------------------===//
+
+// RUN: %target-run-simple-swift
+// REQUIRES: executable_test
+
+// FIXME: the test is too slow when the standard library is not optimized.
+// rdar://problem/46878013
+// REQUIRES: optimized_stdlib
+
+import StdlibUnittest
+import StdlibCollectionUnittest
+
+var CollectionTests = TestSuite("Collection")
 
 // Test collections using a reference type as element.
 do {

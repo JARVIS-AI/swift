@@ -1,4 +1,4 @@
-// RUN: rm -rf %t && mkdir -p %t
+// RUN: %empty-directory(%t)
 // RUN: %target-build-swift %s -import-objc-header %S/Inputs/rdar29694978.h -emit-module -o %t/Library.swiftmodule
 // RUN: %target-swift-ide-test -print-module -module-to-print=Library -source-filename=x -I %S/Inputs/ -I %t | %FileCheck %s
 
@@ -22,7 +22,7 @@ extension MyNonGenericType {}
 
 // CHECK-DAG: typealias MyGenericType<T> = GenericType<T>
 typealias MyGenericType<T: NSObject> = GenericType<T>
-// CHECK-DAG: extension GenericType where Element : AnyObject
+// CHECK-DAG: extension MyGenericType where Element : NSObject
 extension MyGenericType {}
-// CHECK-DAG: extension GenericType where Element == NSObject
+// CHECK-DAG: extension MyGenericType where Element == NSObject
 extension MyGenericType where Element == NSObject {}

@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -27,12 +27,12 @@ namespace irgen {
 /// A class which describes how to access a particular physical member.
 class MemberAccessStrategy {
 public:
-  enum class OffsetKind : unsigned char {
+  enum class OffsetKind : uint8_t {
     /// A word-size offset that represents a number of bytes.
     Bytes_Word,
   };
 
-  enum class Kind : unsigned char {
+  enum class Kind : uint8_t {
     /// The member has complex or overlapping storage.  It cannot be
     /// accessed simply by projecting out to a particular offset.
     Complex,

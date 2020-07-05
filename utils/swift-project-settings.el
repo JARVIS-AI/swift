@@ -2,7 +2,7 @@
 ;
 ; This source file is part of the Swift.org open source project
 ;
-; Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+; Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 ; Licensed under Apache License v2.0 with Runtime Library Exception
 ;
 ; See https://swift.org/LICENSE.txt for license information
@@ -95,12 +95,12 @@
                 (inline-close . 0)
                 (class-close . 0)
                 (namespace-close . 0)
-                (case-label . -)
+                (case-label . 0)
                 (statement-case-intro . +)
                 (cpp-define-intro . +)
                 (else-clause . 0)
                 (arglist-intro . +)
-                (arglist-cont . +)
+                (arglist-cont . 0)
                 (c . c-lineup-C-comments)
                 (inher-cont . c-lineup-multi-inher)
                 (string . -1000)
@@ -114,7 +114,7 @@
 ;; project settings yet.  For example, Swift files may come up in
 ;; Fundamental mode, and C++ files won't use the swift style, unless
 ;; we do something.  This hack causes the file to be re-mode-ed.
-(set-auto-mode)
+(unless (eq major-mode 'dired-mode) (set-auto-mode))
 
 (defun swift-project-comment-end ()
   "If comment-end is non-empty returns it, stripped of leading whitespace.  Returns nil otherwise"
@@ -165,7 +165,7 @@ Swift header should look like.
 "//
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -363,13 +363,13 @@ everything in the Swift project" )
 
 (defconst swift-project-single-frontend-swiftc-args
   (append swift-project-common-swiftc-args
-           (list "-force-single-frontend-invocation" "-parse-as-library"))
+           (list "-whole-module-optimization" "-parse-as-library"))
   "The arguments we'll pass to swiftc for syntax-checking
 libraries that require a single frontend invocation" )
 
 (defconst swift-project-stdlib-aux-swiftc-args
   (append swift-project-single-frontend-swiftc-args
-          (list "-Xfrontend" "-sil-serialize-all" "-parse-stdlib"))
+          (list "-sil-serialize-vtables" "-parse-stdlib"))
   "swiftc arguments for library components that are compiled as
   though they are part of the standard library even though
   they're not strictly in that binary."  )
@@ -395,7 +395,7 @@ of arguments that are passed to swiftc when compiling it."
   (cond ((string-match-p "^stdlib/public/core/" relative-file)
          swift-project-stdlib-swiftc-args)
         ((string-match-p
-          "^stdlib/\(public/SwiftOnoneSupport\|internal\|private/SwiftPrivate\(PthreadExtras\|LibcExtras\)?\)/"
+          "^stdlib/\(public/SwiftOnoneSupport\|internal\|private/SwiftPrivate\(ThreadExtras\|LibcExtras\)?\)/"
           relative-file)
          swift-project-stdlib-aux-swiftc-args)
         (t swift-project-single-frontend-swiftc-args)))

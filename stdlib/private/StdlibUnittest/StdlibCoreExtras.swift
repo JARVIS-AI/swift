@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -12,10 +12,12 @@
 
 import SwiftPrivate
 import SwiftPrivateLibcExtras
-#if os(OSX) || os(iOS)
+#if canImport(Darwin)
 import Darwin
-#elseif os(Linux) || os(FreeBSD) || os(PS4) || os(Android)
+#elseif canImport(Glibc)
 import Glibc
+#elseif os(Windows)
+import MSVCRT
 #endif
 
 #if _runtime(_ObjC)
@@ -26,6 +28,10 @@ import Foundation
 // These APIs don't really belong in a unit testing library, but they are
 // useful in tests, and stdlib does not have such facilities yet.
 //
+
+func findSubstring(_ haystack: Substring, _ needle: String) -> String.Index? {
+  return findSubstring(haystack._ephemeralString, needle)
+}
 
 func findSubstring(_ string: String, _ substring: String) -> String.Index? {
   if substring.isEmpty {
@@ -48,7 +54,7 @@ func findSubstring(_ string: String, _ substring: String) -> String.Index? {
     while true {
       if needleIndex == needle.endIndex {
         // if we hit the end of the search string, we found the needle
-        return matchStartIndex.samePosition(in: string)
+        return matchStartIndex
       }
       if matchIndex == haystack.endIndex {
         // if we hit the end of the string before finding the end of the needle,
@@ -69,6 +75,7 @@ func findSubstring(_ string: String, _ substring: String) -> String.Index? {
 #endif
 }
 
+#if !os(Windows)
 public func createTemporaryFile(
   _ fileNamePrefix: String, _ fileNameSuffix: String, _ contents: String
 ) -> String {
@@ -91,6 +98,7 @@ public func createTemporaryFile(
   }
   return fileName
 }
+#endif
 
 public final class Box<T> {
   public init(_ value: T) { self.value = value }
@@ -106,14 +114,20 @@ public func <=> <T: Comparable>(lhs: T, rhs: T) -> ExpectedComparisonResult {
 }
 
 public struct TypeIdentifier : Hashable, Comparable {
+  public var value: Any.Type
+
   public init(_ value: Any.Type) {
     self.value = value
   }
 
   public var hashValue: Int { return objectID.hashValue }
-  public var value: Any.Type
-  
-  internal var objectID : ObjectIdentifier { return ObjectIdentifier(value) }
+  public func hash(into hasher: inout Hasher) {
+    hasher.combine(objectID)
+  }
+
+  internal var objectID : ObjectIdentifier {
+    return ObjectIdentifier(value)
+  }
 }
 
 public func < (lhs: TypeIdentifier, rhs: TypeIdentifier) -> Bool {
@@ -149,7 +163,7 @@ extension MutableCollection
     var f = subrange.lowerBound
     var l = index(before: subrange.upperBound)
     while f < l {
-      swap(&self[f], &self[l])
+      swapAt(f, l)
       formIndex(after: &f)
       formIndex(before: &l)
     }
@@ -195,7 +209,7 @@ extension MutableCollection
         repeat {
           formIndex(before: &j)
         } while !(elementAtBeforeI < self[j])
-        swap(&self[beforeI], &self[j])
+        swapAt(beforeI, j)
         _reverseSubrange(i..<endIndex)
         return .success
       }
@@ -223,7 +237,7 @@ public func forAllPermutations(_ size: Int, _ body: ([Int]) -> Void) {
 
 /// Generate all permutations.
 public func forAllPermutations<S : Sequence>(
-  _ sequence: S, _ body: ([S.Iterator.Element]) -> Void
+  _ sequence: S, _ body: ([S.Element]) -> Void
 ) {
   let data = Array(sequence)
   forAllPermutations(data.count) {
@@ -235,8 +249,8 @@ public func forAllPermutations<S : Sequence>(
 
 public func cartesianProduct<C1 : Collection, C2 : Collection>(
   _ c1: C1, _ c2: C2
-) -> [(C1.Iterator.Element, C2.Iterator.Element)] {
-  var result: [(C1.Iterator.Element, C2.Iterator.Element)] = []
+) -> [(C1.Element, C2.Element)] {
+  var result: [(C1.Element, C2.Element)] = []
   for e1 in c1 {
     for e2 in c2 {
       result.append((e1, e2))
@@ -245,3 +259,38 @@ public func cartesianProduct<C1 : Collection, C2 : Collection>(
   return result
 }
 
+/// Return true if the standard library was compiled in a debug configuration.
+public func _isStdlibDebugConfiguration() -> Bool {
+#if SWIFT_STDLIB_DEBUG
+  return true
+#else
+  return false
+#endif
+}
+
+// Return true if the Swift runtime available is at least 5.1
+public func _hasSwift_5_1() -> Bool {
+  if #available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *) {
+    return true
+  }
+  return false
+}
+
+@frozen
+public struct LinearCongruentialGenerator: RandomNumberGenerator {
+
+  @usableFromInline
+  internal var _state: UInt64
+
+  @inlinable
+  public init(seed: UInt64) {
+    _state = seed
+    for _ in 0 ..< 10 { _ = next() }
+  }
+
+  @inlinable
+  public mutating func next() -> UInt64 {
+    _state = 2862933555777941757 &* _state &+ 3037000493
+    return _state
+  }
+}

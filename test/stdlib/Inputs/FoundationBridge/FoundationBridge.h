@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -68,5 +68,30 @@ BOOL identityOfData(NSData *data);
 - (NSLocale *)autoupdatingCurrentLocale;
 - (BOOL)verifyAutoupdatingLocale:(NSLocale *)locale;
 @end
+
+#pragma mark - NSNumber verification
+
+@interface NumberBridgingTester : NSObject
+- (BOOL)verifyKeysInRange:(NSRange)range existInDictionary:(NSDictionary *)dictionary;
+@end
+
+#pragma mark - NSString bridging
+
+static inline NSString *getNSStringEqualTestString() {
+  return [NSString stringWithUTF8String:"2166002315@874404110.1042078977"];
+}
+
+static inline BOOL NSStringBridgeTestEqual(NSString * _Nonnull a, NSString * _Nonnull b) {
+  return [a isEqual:b];
+}
+
+static inline NSString *getNSStringWithUnpairedSurrogate() {
+  unichar chars[16] = {
+    0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0020,
+    0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0020,
+    0x0020, 0x0020, 0x0020, 0x0020, 0x0020, 0x0020,
+    0xD800 };
+  return [NSString stringWithCharacters:chars length:1];
+}
 
 NS_ASSUME_NONNULL_END

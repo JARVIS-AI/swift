@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -21,6 +21,12 @@
 // We maintain a map (node index in graph)->(node index in heap) to be able to
 // update the heap fast when we add a new node to the tree.
 import TestsUtils
+
+public let Prims = BenchmarkInfo(
+  name: "Prims",
+  runFunction: run_Prims,
+  tags: [.validation, .algorithm],
+  legacyFactor: 5)
 
 class PriorityQueue {
   final var heap: Array<EdgeCost>
@@ -176,10 +182,9 @@ func ==(lhs: Edge, rhs: Edge) -> Bool {
 }
 
 extension Edge : Hashable {
-  var hashValue: Int {
-    get {
-      return start.hashValue ^ end.hashValue
-    }
+  func hash(into hasher: inout Hasher) {
+    hasher.combine(start)
+    hasher.combine(end)
   }
 }
 
@@ -215,7 +220,7 @@ func Prims(_ graph : Array<GraphNode>, _ fun : (Int, Int) -> Double) -> Array<In
 
 @inline(never)
 public func run_Prims(_ N: Int) {
-  for _ in 1...5*N {
+  for _ in 1...N {
     let nodes : [Int] = [ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
       13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
       29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44,
@@ -751,7 +756,6 @@ public func run_Prims(_ N: Int) {
     for i in 1..<treeEdges.count {
       if let n = treeEdges[i] { cost += map[Edge(start: n, end: i)]! }
     }
-    CheckResults(Int(cost) == 49324,
-                 "Incorrect results in Prims: \(Int(cost)) != 49324.")
+    CheckResults(Int(cost) == 49324)
   }
 }

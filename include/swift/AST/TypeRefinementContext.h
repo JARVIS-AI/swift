@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -21,6 +21,7 @@
 #include "swift/AST/Identifier.h"
 #include "swift/AST/Availability.h"
 #include "swift/AST/Stmt.h" // for PoundAvailableInfo
+#include "swift/Basic/Debug.h"
 #include "swift/Basic/LLVM.h"
 #include "swift/Basic/SourceLoc.h"
 #include "swift/Basic/STLExtras.h"
@@ -225,7 +226,16 @@ public:
   /// or an invalid location if the context reflects the minimum deployment
   // target.
   SourceLoc getIntroductionLoc() const;
-  
+
+  /// Returns the source range covering a _single_ decl-attribute or statement
+  /// condition that introduced the refinement context for a given platform
+  /// version; if zero or multiple such responsible attributes or statements
+  /// exist, returns an invalid SourceRange.
+  SourceRange
+  getAvailabilityConditionVersionSourceRange(
+      PlatformKind Platform,
+      const llvm::VersionTuple &Version) const;
+
   /// Returns the source range on which this context refines types.
   SourceRange getSourceRange() const { return SrcRange; }
 
@@ -246,9 +256,7 @@ public:
   TypeRefinementContext *findMostRefinedSubContext(SourceLoc Loc,
                                                    SourceManager &SM);
 
-  LLVM_ATTRIBUTE_DEPRECATED(
-      void dump(SourceManager &SrcMgr) const LLVM_ATTRIBUTE_USED,
-      "only for use within the debugger");
+  SWIFT_DEBUG_DUMPER(dump(SourceManager &SrcMgr));
   void dump(raw_ostream &OS, SourceManager &SrcMgr) const;
   void print(raw_ostream &OS, SourceManager &SrcMgr, unsigned Indent = 0) const;
   

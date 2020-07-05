@@ -1,16 +1,29 @@
 /* magic */
 // Do not edit the line above.
 
-// RUN: rm -rf %t  &&  mkdir -p %t
+// RUN: %empty-directory(%t)
 // RUN: %target-run-simple-swift %s %t | %FileCheck %s
-// rdar://26960623
-// REQUIRES: disabled
+
 // REQUIRES: executable_test
 
-#if os(OSX) || os(iOS) || os(watchOS) || os(tvOS)
+// TODO: rdar://problem/33388782
+// REQUIRES: CPU=x86_64
+
+#if canImport(Darwin)
   import Darwin
-#elseif os(Linux) || os(FreeBSD) || os(PS4) || os(Android)
+#elseif canImport(Glibc)
   import Glibc
+#elseif os(Windows)
+  import MSVCRT
+
+  let S_IRUSR: Int32 = ucrt._S_IREAD
+  let S_IWUSR: Int32 = 0
+  let S_IXUSR: Int32 = 0
+
+  let S_IRGRP: Int32 = 0o0040
+  let S_IROTH: Int32 = 0o0004
+#else
+#error("Unsupported platform")
 #endif
 
 let sourcePath = CommandLine.arguments[1]
@@ -37,22 +50,51 @@ let errFile =
   open(sourcePath, O_RDONLY | O_CREAT | O_EXCL)
 if errFile != -1 { 
   print("O_CREAT|O_EXCL failed to return an error") 
-} else { 
-  print("O_CREAT|O_EXCL returned errno *\(errno)*") 
+} else {
+  let e = errno
+  print("O_CREAT|O_EXCL returned errno *\(e)*") 
 }
 
-// CHECK: created mode *33216*
+// CHECK-NOT: error
+// CHECK: created mode *{{33216|33060}}* *{{33216|33060}}*
 let tempFile = 
   open(tempPath, O_RDWR | O_CREAT | O_EXCL, S_IRUSR | S_IWUSR | S_IXUSR)
-let written = write(tempFile, bytes, 11)
-assert(written == 11)
-close(tempFile)
-var statbuf = stat()
-let err = stat(tempPath, &statbuf)
-if err != 0 { 
-  print("stat returned \(err), errno \(errno)") 
-} else { 
-  print("created mode *\(statbuf.st_mode)*") 
-  assert(statbuf.st_mode == S_IFREG | S_IRUSR | S_IWUSR | S_IXUSR)
+if tempFile == -1 {
+  let e = errno
+  print("error: open(tempPath \(tempPath)) returned -1, errno \(e)")
+  abort()
 }
+let written = write(tempFile, bytes, 11)
+if (written != 11) {
+  print("error: write(tempFile) returned \(written), errno \(errno)")
+  abort()
+}
+
+var err: Int32
+var statbuf1 = stat()
+err = fstat(tempFile, &statbuf1)
+if err != 0 {
+  let e = errno
+  print("error: fstat returned \(err), errno \(e)")
+  abort()
+}
+
+close(tempFile)
+
+var statbuf2 = stat()
+err = stat(tempPath, &statbuf2)
+if err != 0 {
+  let e = errno
+  print("error: stat returned \(err), errno \(e)")
+  abort()
+}
+
+print("created mode *\(statbuf1.st_mode)* *\(statbuf2.st_mode)*")
+
+#if os(Windows)
+assert(statbuf1.st_mode == S_IFREG | S_IRUSR | S_IRGRP | S_IROTH)
+#else
+assert(statbuf1.st_mode == S_IFREG | S_IRUSR | S_IWUSR | S_IXUSR)
+#endif
+assert(statbuf1.st_mode == statbuf2.st_mode)
 

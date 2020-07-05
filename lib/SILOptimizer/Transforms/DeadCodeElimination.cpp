@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -11,19 +11,19 @@
 //===----------------------------------------------------------------------===//
 
 #define DEBUG_TYPE "sil-dce"
+#include "swift/SIL/DebugUtils.h"
 #include "swift/SIL/SILArgument.h"
 #include "swift/SIL/SILBasicBlock.h"
 #include "swift/SIL/SILBuilder.h"
 #include "swift/SIL/SILFunction.h"
 #include "swift/SIL/SILUndef.h"
-#include "swift/SIL/DebugUtils.h"
 #include "swift/SILOptimizer/Analysis/DominanceAnalysis.h"
 #include "swift/SILOptimizer/PassManager/Passes.h"
 #include "swift/SILOptimizer/PassManager/Transforms.h"
-#include "swift/SILOptimizer/Utils/Local.h"
+#include "swift/SILOptimizer/Utils/InstOptUtils.h"
 #include "llvm/ADT/DenseMap.h"
-#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
@@ -40,19 +40,26 @@ namespace {
 // FIXME: Reconcile the similarities between this and
 //        isInstructionTriviallyDead.
 static bool seemsUseful(SILInstruction *I) {
+  // begin_access is defined to have side effects, but this is not relevant for
+  // DCE.
+  if (isa<BeginAccessInst>(I))
+    return false;
+
   if (I->mayHaveSideEffects())
     return true;
 
   if (auto *BI = dyn_cast<BuiltinInst>(I)) {
     // Although the onFastPath builtin has no side-effects we don't want to
     // remove it.
-    if (BI->getBuiltinInfo().ID == BuiltinValueKind::OnFastPath)
-      return true;
-    return false;
+    return BI->getBuiltinInfo().ID == BuiltinValueKind::OnFastPath;
   }
 
-  if (isa<ReturnInst>(I) || isa<UnreachableInst>(I) || isa<ThrowInst>(I))
+  if (isa<UnreachableInst>(I))
     return true;
+  if (auto TI = dyn_cast<TermInst>(I)) {
+    if (TI->isFunctionExiting())
+      return true;
+  }
 
   return false;
 }
@@ -75,7 +82,7 @@ struct ControllingInfo {
 class DCE : public SILFunctionTransform {
   typedef llvm::DomTreeNodeBase<SILBasicBlock> PostDomTreeNode;
 
-  llvm::SmallPtrSet<ValueBase *, 16> LiveValues;
+  llvm::SmallPtrSet<SILNode *, 16> LiveValues;
   llvm::SmallPtrSet<SILBasicBlock *, 16> LiveBlocks;
   llvm::SmallVector<SILInstruction *, 64> Worklist;
   PostDominanceInfo *PDT;
@@ -109,7 +116,11 @@ class DCE : public SILFunctionTransform {
 
     SILFunction *F = getFunction();
 
-    auto* DA = PM->getAnalysis<PostDominanceAnalysis>();
+    // FIXME: Support ownership.
+    if (F->hasOwnership())
+      return;
+
+    auto *DA = PM->getAnalysis<PostDominanceAnalysis>();
     PDT = DA->get(F);
 
     // If we have a function that consists of nothing but a
@@ -119,8 +130,8 @@ class DCE : public SILFunctionTransform {
     if (!PDT->getRootNode())
       return;
 
-    DEBUG(F->dump());
-    DEBUG(PDT->print(llvm::dbgs()));
+    LLVM_DEBUG(F->dump());
+    LLVM_DEBUG(PDT->print(llvm::dbgs()));
 
     assert(Worklist.empty() && LiveValues.empty() && LiveBlocks.empty() &&
            ControllingInfoMap.empty() && ReverseDependencies.empty() &&
@@ -156,37 +167,37 @@ class DCE : public SILFunctionTransform {
   void addReverseDependency(SILInstruction *From, SILInstruction *To);
   bool removeDead(SILFunction &F);
 
-  void computeLevelNumbers(PostDomTreeNode *Node, unsigned Level);
+  void computeLevelNumbers(PostDomTreeNode *root);
   bool hasInfiniteLoops(SILFunction &F);
   void computePredecessorDependence(SILFunction &F);
-  unsigned computeMinPredecessorLevels(PostDomTreeNode *Node);
+  void computeMinPredecessorLevels(PostDomTreeNode *root);
   void insertControllingInfo(SILBasicBlock *Block, unsigned Level);
 
-  void markValueLive(ValueBase *V);
+  void markValueLive(SILNode *V);
   void markTerminatorArgsLive(SILBasicBlock *Pred, SILBasicBlock *Succ,
                               size_t ArgIndex);
   void markControllingTerminatorsLive(SILBasicBlock *Block);
   void propagateLiveBlockArgument(SILArgument *Arg);
   void propagateLiveness(SILInstruction *I);
   void collectControllingBlocksInTree(ControllingInfo &QueryInfo,
-                                      PostDomTreeNode *Node,
+                                      PostDomTreeNode *root,
                            llvm::SmallPtrSetImpl<SILBasicBlock *> &Controlling);
   void collectControllingBlocks(SILBasicBlock *Block,
                                 llvm::SmallPtrSetImpl<SILBasicBlock *> &);
   SILBasicBlock *nearestUsefulPostDominator(SILBasicBlock *Block);
   void replaceBranchWithJump(SILInstruction *Inst, SILBasicBlock *Block);
 
-  StringRef getName() override { return "Dead Code Elimination"; }
 };
 
 // Keep track of the fact that V is live and add it to our worklist
 // so that we can process the values it depends on.
-void DCE::markValueLive(ValueBase *V) {
+void DCE::markValueLive(SILNode *V) {
+  V = V->getRepresentativeSILNodeInObject();
   if (LiveValues.count(V) || isa<SILUndef>(V))
     return;
 
-  DEBUG(llvm::dbgs() << "Marking as live:\n");
-  DEBUG(V->dump());
+  LLVM_DEBUG(llvm::dbgs() << "Marking as live:\n");
+  LLVM_DEBUG(V->dump());
 
   LiveValues.insert(V);
 
@@ -195,6 +206,8 @@ void DCE::markValueLive(ValueBase *V) {
     Worklist.push_back(Def);
     return;
   }
+
+  // TODO: MultiValueInstruction
 
   assert(isa<SILArgument>(V) &&
          "Only expected instructions and arguments!");
@@ -242,12 +255,16 @@ void DCE::markLive(SILFunction &F) {
         // A fix_lifetime (with a non-address type) is only alive if it's
         // definition is alive.
         SILValue Op = FLI->getOperand();
-        auto *OpInst = dyn_cast<SILInstruction>(Op);
+        auto *OpInst = Op->getDefiningInstruction();
         if (OpInst && !Op->getType().isAddress()) {
           addReverseDependency(OpInst, FLI);
         } else {
           markValueLive(FLI);
         }
+        continue;
+      }
+      if (auto *endAccess = dyn_cast<EndAccessInst>(&I)) {
+        addReverseDependency(endAccess->getBeginAccess(), &I);
         continue;
       }
       if (seemsUseful(&I))
@@ -291,6 +308,8 @@ void DCE::markTerminatorArgsLive(SILBasicBlock *Pred,
   switch (Term->getTermKind()) {
   case TermKind::ReturnInst:
   case TermKind::ThrowInst:
+  case TermKind::UnwindInst:
+  case TermKind::YieldInst:
 
   case TermKind::UnreachableInst:
   case TermKind::SwitchValueInst:
@@ -302,6 +321,7 @@ void DCE::markTerminatorArgsLive(SILBasicBlock *Pred,
   case TermKind::DynamicMethodBranchInst:
   case TermKind::SwitchEnumInst:
   case TermKind::CheckedCastBranchInst:
+  case TermKind::CheckedCastValueBranchInst:
     assert(ArgIndex == 0 && "Expected a single argument!");
 
     // We do not need to do anything with these. If the resulting
@@ -365,8 +385,9 @@ void DCE::propagateLiveness(SILInstruction *I) {
     // Conceptually, the dependency from a debug instruction to its definition
     // is in reverse direction: Only if its definition is alive, also the
     // debug_value instruction is alive.
-    for (Operand *DU : getDebugUses(I))
-      markValueLive(DU->getUser());
+    for (auto result : I->getResults())
+      for (Operand *DU : getDebugUses(result))
+        markValueLive(DU->getUser());
 
     // Handle all other reverse-dependency instructions, like cond_fail and
     // fix_lifetime. Only if the definition is alive, the user itself is alive.
@@ -376,9 +397,10 @@ void DCE::propagateLiveness(SILInstruction *I) {
     return;
   }
 
-  switch (ValueKindAsTermKind(I->getKind())) {
+  switch (cast<TermInst>(I)->getTermKind()) {
   case TermKind::BranchInst:
   case TermKind::UnreachableInst:
+  case TermKind::UnwindInst:
     return;
 
   case TermKind::ReturnInst:
@@ -387,19 +409,17 @@ void DCE::propagateLiveness(SILInstruction *I) {
   case TermKind::SwitchEnumInst:
   case TermKind::SwitchEnumAddrInst:
   case TermKind::DynamicMethodBranchInst:
-  case TermKind::CheckedCastBranchInst:
     markValueLive(I->getOperand(0));
     return;
 
+  case TermKind::CheckedCastBranchInst:
+  case TermKind::CheckedCastValueBranchInst:
+  case TermKind::CheckedCastAddrBranchInst:
   case TermKind::TryApplyInst:
   case TermKind::SwitchValueInst:
+  case TermKind::YieldInst:
     for (auto &O : I->getAllOperands())
       markValueLive(O.get());
-    return;
-
-  case TermKind::CheckedCastAddrBranchInst:
-    markValueLive(I->getOperand(0));
-    markValueLive(I->getOperand(1));
     return;
   }
   llvm_unreachable("corrupt instruction!");
@@ -408,10 +428,12 @@ void DCE::propagateLiveness(SILInstruction *I) {
 SILBasicBlock *DCE::nearestUsefulPostDominator(SILBasicBlock *Block) {
   // Find the nearest post-dominator that has useful instructions.
   auto *PostDomNode = PDT->getNode(Block)->getIDom();
-  while (!LiveBlocks.count(PostDomNode->getBlock()))
+  while (PostDomNode && !LiveBlocks.count(PostDomNode->getBlock()))
     PostDomNode = PostDomNode->getIDom();
 
-  return PostDomNode->getBlock();
+  if (PostDomNode)
+    return PostDomNode->getBlock();
+  return nullptr;
 }
 
 // Replace the given conditional branching instruction with a plain
@@ -435,15 +457,15 @@ void DCE::replaceBranchWithJump(SILInstruction *Inst, SILBasicBlock *Block) {
     auto E = Block->args_end();
     for (auto A = Block->args_begin(); A != E; ++A) {
       assert(!LiveValues.count(*A) && "Unexpected live block argument!");
-      Args.push_back(SILUndef::get((*A)->getType(), (*A)->getModule()));
+      Args.push_back(SILUndef::get((*A)->getType(), *(*A)->getFunction()));
     }
     Branch =
         SILBuilderWithScope(Inst).createBranch(Inst->getLoc(), Block, Args);
   } else {
     Branch = SILBuilderWithScope(Inst).createBranch(Inst->getLoc(), Block);
   }
-  DEBUG(llvm::dbgs() << "Inserted unconditional branch:\n");
-  DEBUG(Branch->dump());
+  LLVM_DEBUG(llvm::dbgs() << "Inserted unconditional branch:\n");
+  LLVM_DEBUG(Branch->dump());
   (void)Branch;
 }
 
@@ -457,28 +479,28 @@ bool DCE::removeDead(SILFunction &F) {
       if (LiveValues.count(Inst))
         continue;
 
-      DEBUG(llvm::dbgs() << "Removing dead argument:\n");
-      DEBUG(Inst->dump());
+      LLVM_DEBUG(llvm::dbgs() << "Removing dead argument:\n");
+      LLVM_DEBUG(Inst->dump());
 
-      if (Inst->hasValue()) {
-        auto *Undef = SILUndef::get(Inst->getType(), Inst->getModule());
-        Inst->replaceAllUsesWith(Undef);
-      }
+      Inst->replaceAllUsesWithUndef();
 
       Changed = true;
     }
 
     for (auto I = BB.begin(), E = BB.end(); I != E; ) {
       auto *Inst = &*I;
-      I++;
+      ++I;
       if (LiveValues.count(Inst) || isa<BranchInst>(Inst))
         continue;
 
       // We want to replace dead terminators with unconditional branches to
       // the nearest post-dominator that has useful instructions.
       if (isa<TermInst>(Inst)) {
-        replaceBranchWithJump(Inst,
-                              nearestUsefulPostDominator(Inst->getParent()));
+        SILBasicBlock *postDom = nearestUsefulPostDominator(Inst->getParent());
+        if (!postDom)
+          continue;
+  
+        replaceBranchWithJump(Inst, postDom);
         Inst->eraseFromParent();
         BranchesChanged = true;
         Changed = true;
@@ -487,14 +509,10 @@ bool DCE::removeDead(SILFunction &F) {
 
       ++NumDeletedInsts;
 
-      DEBUG(llvm::dbgs() << "Removing dead instruction:\n");
-      DEBUG(Inst->dump());
+      LLVM_DEBUG(llvm::dbgs() << "Removing dead instruction:\n");
+      LLVM_DEBUG(Inst->dump());
 
-      if (Inst->hasValue()) {
-        auto *Undef = SILUndef::get(Inst->getType(), Inst->getModule());
-        Inst->replaceAllUsesWith(Undef);
-      }
-
+      Inst->replaceAllUsesOfAllResultsWithUndef();
 
       if (isa<ApplyInst>(Inst))
         CallsChanged = true;
@@ -528,7 +546,7 @@ bool DCE::removeDead(SILFunction &F) {
 // Returns true upon success, false if nodes that are not present in the
 // post-dominator tree are detected.
 bool DCE::precomputeControlInfo(SILFunction &F) {
-  computeLevelNumbers(PDT->getRootNode(), 0);
+  computeLevelNumbers(PDT->getRootNode());
   if (hasInfiniteLoops(F))
     return false;
   computePredecessorDependence(F);
@@ -548,12 +566,22 @@ void DCE::insertControllingInfo(SILBasicBlock *Block, unsigned Level) {
   ControllingInfoMap[Block] = Info;
 }
 
-// Assign a level number to each node in the post-dominator tree, and
-void DCE::computeLevelNumbers(PostDomTreeNode *Node, unsigned Level) {
-  insertControllingInfo(Node->getBlock(), Level);
+// Assign a level number to each node in the post-dominator tree.
+void DCE::computeLevelNumbers(PostDomTreeNode *root) {
+  llvm::SmallVector<std::pair<PostDomTreeNode *, unsigned>, 32> workList;
+  workList.push_back({root, 0});
 
-  for (auto Child = Node->begin(), End = Node->end(); Child != End; ++Child)
-    computeLevelNumbers(*Child, Level + 1);
+  while (!workList.empty()) {
+    auto entry = workList.pop_back_val();
+    PostDomTreeNode *node = entry.first;
+    unsigned level = entry.second;
+    
+    insertControllingInfo(node->getBlock(), level);
+    
+    for (PostDomTreeNode *child : *node) {
+      workList.push_back({child, level + 1});
+    }
+  }
 }
 
 // Structurally infinite loops like:
@@ -596,51 +624,65 @@ void DCE::computePredecessorDependence(SILFunction &F) {
   }
 }
 
-// Return the minimum post-dominator tree level of any of the
-// direct controlling predecessors of this node or any child.
-unsigned DCE::computeMinPredecessorLevels(PostDomTreeNode *Node) {
-  unsigned Min = -1;
+// Assign the minimum post-dominator tree level to each node in the tree.
+void DCE::computeMinPredecessorLevels(PostDomTreeNode *root) {
+  llvm::SmallVector<PostDomTreeNode *, 32> postDomOrder;
+  postDomOrder.reserve(ControllingInfoMap.size());
+  postDomOrder.push_back(root);
 
-  auto *Block = Node->getBlock();
+  for (unsigned idx = 0; idx < postDomOrder.size(); ++idx) {
+    PostDomTreeNode *node = postDomOrder[idx];
+    for (PostDomTreeNode *child : *node) {
+      postDomOrder.push_back(child);
+    }
+  }
 
-  assert(ControllingInfoMap.find(Block) != ControllingInfoMap.end() &&
-         "Expected to have map entry for node!");
+  for (PostDomTreeNode *node : llvm::reverse(postDomOrder)) {
+    SILBasicBlock *block = node->getBlock();
+    assert(ControllingInfoMap.find(block) != ControllingInfoMap.end() &&
+           "Expected to have map entry for node!");
 
-  auto &MapElement = ControllingInfoMap[Block];
-  for (auto &PredInfo : MapElement.ControllingPreds)
-    Min = std::min(Min, PredInfo.second);
-
-  for (auto Child = Node->begin(), End = Node->end(); Child != End; ++Child)
-    Min = std::min(Min, computeMinPredecessorLevels(*Child));
-
-  MapElement.MinTreePredLevel = Min;
-
-  return Min;
+    ControllingInfo &nodeInfo = ControllingInfoMap[block];
+    for (auto &pred : nodeInfo.ControllingPreds) {
+      nodeInfo.MinTreePredLevel = std::min(nodeInfo.MinTreePredLevel, pred.second);
+    }
+    if (PostDomTreeNode *parentNode = node->getIDom()) {
+      ControllingInfo &parentInfo = ControllingInfoMap[parentNode->getBlock()];
+      parentInfo.MinTreePredLevel = std::min(parentInfo.MinTreePredLevel, nodeInfo.MinTreePredLevel);
+    }
+  }
 }
 
 void DCE::collectControllingBlocksInTree(ControllingInfo &QueryInfo,
-                                         PostDomTreeNode *Node,
+                                         PostDomTreeNode *root,
                           llvm::SmallPtrSetImpl<SILBasicBlock *> &Controlling) {
-  auto *Block = Node->getBlock();
+  llvm::SmallVector<PostDomTreeNode *, 32> workList;
+  workList.push_back(root);
 
-  assert(ControllingInfoMap.find(Block) != ControllingInfoMap.end() &&
-         "Expected to have map entry for node!");
+  while (!workList.empty()) {
+    PostDomTreeNode *node = workList.pop_back_val();
+    SILBasicBlock *block = node->getBlock();
 
-  auto &MapEntry = ControllingInfoMap[Block];
-  if (MapEntry.MinTreePredLevel > QueryInfo.Level)
-    return;
+    assert(ControllingInfoMap.find(block) != ControllingInfoMap.end() &&
+          "Expected to have map entry for node!");
 
-  for (auto &PredInfo : MapEntry.ControllingPreds)
-    if (PredInfo.second <= QueryInfo.Level) {
-      assert(PDT->properlyDominates(
-                            PDT->getNode(PredInfo.first)->getIDom()->getBlock(),
-                                         QueryInfo.Block) &&
-             "Expected predecessor's post-dominator to post-dominate node.");
-      Controlling.insert(PredInfo.first);
+    auto &nodeInfo = ControllingInfoMap[block];
+    if (nodeInfo.MinTreePredLevel > QueryInfo.Level)
+      continue;
+
+    for (auto &PredInfo : nodeInfo.ControllingPreds) {
+      if (PredInfo.second <= QueryInfo.Level) {
+        assert(PDT->properlyDominates(
+                              PDT->getNode(PredInfo.first)->getIDom()->getBlock(),
+                                           QueryInfo.Block) &&
+               "Expected predecessor's post-dominator to post-dominate node.");
+        Controlling.insert(PredInfo.first);
+      }
     }
-
-  for (auto Child = Node->begin(), End = Node->end(); Child != End; ++Child)
-    collectControllingBlocksInTree(QueryInfo, (*Child), Controlling);
+    for (PostDomTreeNode *child : *node) {
+      workList.push_back(child);
+    }
+  }
 }
 
 // Walk the post-dominator tree from the query block down, building

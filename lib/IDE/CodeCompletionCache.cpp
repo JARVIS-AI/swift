@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -77,7 +77,7 @@ void CodeCompletionCache::setImpl(const Key &K, ValueRefCntPtr V,
 
     llvm::sys::fs::file_status ModuleStatus;
     if (llvm::sys::fs::status(K.ModuleFilename, ModuleStatus)) {
-      V->ModuleModificationTime = llvm::sys::TimeValue::now();
+      V->ModuleModificationTime = std::chrono::system_clock::now();
       return;
     } else {
       V->ModuleModificationTime = ModuleStatus.getLastModificationTime();
@@ -137,6 +137,7 @@ static bool readCachedModule(llvm::MemoryBuffer *in,
     auto result = llvm::support::endian::read32le(cursor);
     cursor += sizeof(result);
     assert(cursor <= end);
+    (void)end;
     return result;
   };
 
@@ -153,7 +154,8 @@ static bool readCachedModule(llvm::MemoryBuffer *in,
     if (!allowOutOfDate) {
       llvm::sys::fs::file_status status;
       if (llvm::sys::fs::status(K.ModuleFilename, status) ||
-          status.getLastModificationTime().toEpochTime() != mtime) {
+          status.getLastModificationTime().time_since_epoch().count() !=
+          std::chrono::nanoseconds(mtime).count()) {
         return false; // Out of date, or doesn't exist.
       }
     }
@@ -213,6 +215,7 @@ static bool readCachedModule(llvm::MemoryBuffer *in,
     auto opKind = static_cast<CodeCompletionOperatorKind>(*cursor++);
     auto context = static_cast<SemanticContextKind>(*cursor++);
     auto notRecommended = static_cast<bool>(*cursor++);
+    auto isSystem = static_cast<bool>(*cursor++);
     auto numBytesToErase = static_cast<unsigned>(*cursor++);
     auto oldCursor = cursor;
     auto chunkIndex = read32le(cursor);
@@ -246,14 +249,15 @@ static bool readCachedModule(llvm::MemoryBuffer *in,
     CodeCompletionResult *result = nullptr;
     if (kind == CodeCompletionResult::Declaration) {
       result = new (*V.Sink.Allocator) CodeCompletionResult(
-          context, numBytesToErase, string, declKind, moduleName,
+          context, numBytesToErase, string, declKind, isSystem, moduleName,
           notRecommended, CodeCompletionResult::NotRecommendedReason::NoReason,
           briefDocComment, copyStringArray(*V.Sink.Allocator, assocUSRs),
-          copyStringPairArray(*V.Sink.Allocator, declKeywords), opKind);
+          copyStringPairArray(*V.Sink.Allocator, declKeywords),
+          CodeCompletionResult::Unknown, opKind);
     } else {
       result = new (*V.Sink.Allocator)
           CodeCompletionResult(kind, context, numBytesToErase, string,
-                               CodeCompletionResult::Unrelated, opKind);
+                               CodeCompletionResult::NotApplicable, opKind);
     }
 
     V.Sink.Results.push_back(result);
@@ -288,12 +292,13 @@ static void writeCachedModule(llvm::raw_ostream &out,
                               const CodeCompletionCache::Key &K,
                               CodeCompletionCache::Value &V) {
   using namespace llvm::support;
-  endian::Writer<little> LE(out);
+  endian::Writer LE(out, little);
 
   // HEADER
   // Metadata required for reading the completions.
   LE.write(onDiskCompletionCacheVersion);           // Version
-  LE.write(V.ModuleModificationTime.toEpochTime()); // Mtime for module file
+  auto mtime = V.ModuleModificationTime.time_since_epoch().count();
+  LE.write(mtime);                                  // Mtime for module file
 
   // KEY
   // We don't need the stored key to load the results, but it is useful if we
@@ -303,13 +308,15 @@ static void writeCachedModule(llvm::raw_ostream &out,
     llvm::raw_svector_ostream OSS(scratch);
     OSS << K.ModuleFilename << "\0";
     OSS << K.ModuleName << "\0";
-    endian::Writer<little> OSSLE(OSS);
+    endian::Writer OSSLE(OSS, little);
     OSSLE.write(K.AccessPath.size());
     for (StringRef p : K.AccessPath)
       OSS << p << "\0";
     OSSLE.write(K.ResultsHaveLeadingDot);
     OSSLE.write(K.ForTestableLookup);
+    OSSLE.write(K.ForPrivateImportLookup);
     OSSLE.write(K.CodeCompleteInitsInPostfixExpr);
+    OSSLE.write(K.Annotated);
     LE.write(static_cast<uint32_t>(OSS.tell()));   // Size of debug info
     out.write(OSS.str().data(), OSS.str().size()); // Debug info blob
   }
@@ -319,7 +326,7 @@ static void writeCachedModule(llvm::raw_ostream &out,
   llvm::raw_string_ostream results(results_);
   std::string chunks_;
   llvm::raw_string_ostream chunks(chunks_);
-  endian::Writer<little> chunksLE(chunks);
+  endian::Writer chunksLE(chunks, little);
   std::string strings_;
   llvm::raw_string_ostream strings(strings_);
 
@@ -327,7 +334,7 @@ static void writeCachedModule(llvm::raw_ostream &out,
     if (str.empty())
       return ~0u;
     auto size = strings.tell();
-    endian::Writer<little> LE(strings);
+    endian::Writer LE(strings, little);
     LE.write(static_cast<uint32_t>(str.size()));
     strings << str;
     return static_cast<uint32_t>(size);
@@ -351,7 +358,7 @@ static void writeCachedModule(llvm::raw_ostream &out,
 
   // RESULTS
   {
-    endian::Writer<little> LE(results);
+    endian::Writer LE(results, little);
     for (CodeCompletionResult *R : V.Sink.Results) {
       // FIXME: compress bitfield
       LE.write(static_cast<uint8_t>(R->getKind()));
@@ -365,6 +372,7 @@ static void writeCachedModule(llvm::raw_ostream &out,
         LE.write(static_cast<uint8_t>(CodeCompletionOperatorKind::None));
       LE.write(static_cast<uint8_t>(R->getSemanticContext()));
       LE.write(static_cast<uint8_t>(R->isNotRecommended()));
+      LE.write(static_cast<uint8_t>(R->isSystem()));
       LE.write(static_cast<uint8_t>(R->getNumBytesToErase()));
       LE.write(
           static_cast<uint32_t>(addCompletionString(R->getCompletionString())));
@@ -420,7 +428,9 @@ static std::string getName(StringRef cacheDirectory,
   // name[-dot][-testable][-inits]
   OSS << (K.ResultsHaveLeadingDot ? "-dot" : "")
       << (K.ForTestableLookup ? "-testable" : "")
-      << (K.CodeCompleteInitsInPostfixExpr ? "-inits" : "");
+      << (K.ForPrivateImportLookup ? "-private" : "")
+      << (K.CodeCompleteInitsInPostfixExpr ? "-inits" : "")
+      << (K.Annotated ? "-annotated" : "");
 
   // name[-access-path-components]
   for (StringRef component : K.AccessPath)
@@ -432,7 +442,7 @@ static std::string getName(StringRef cacheDirectory,
   llvm::APInt(64, uint64_t(hash)).toStringUnsigned(hashStr, /*Radix*/ 36);
   OSS << "-" << hashStr << ".completions";
 
-  return name.str();
+  return std::string(name.str());
 }
 
 Optional<CodeCompletionCache::ValueRefCntPtr>
@@ -485,7 +495,8 @@ OnDiskCodeCompletionCache::getFromFile(StringRef filename) {
     return None;
 
   // Make up a key for readCachedModule.
-  CodeCompletionCache::Key K{filename, "<module-name>", {}, false, false, false};
+  CodeCompletionCache::Key K{filename.str(), "<module-name>", {},   false,
+                             false,          false,           false, false};
 
   // Read the cached results.
   auto V = CodeCompletionCache::createValue();

@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -26,8 +26,8 @@
 #define SWIFT_SILOPTIMIZER_PASSMANAGER_PASSPIPELINE_H
 
 #include "swift/Basic/LLVM.h"
-#include "swift/SILOptimizer/PassManager/PassPipeline.h"
 #include "swift/SILOptimizer/PassManager/Passes.h"
+#include "llvm/ADT/Hashing.h"
 #include <vector>
 
 namespace swift {
@@ -41,29 +41,37 @@ enum class PassPipelineKind {
 };
 
 class SILPassPipelinePlan final {
+  const SILOptions &Options;
   std::vector<PassKind> Kinds;
   std::vector<SILPassPipeline> PipelineStages;
 
 public:
-  SILPassPipelinePlan() = default;
+  SILPassPipelinePlan(const SILOptions &Options)
+      : Options(Options), Kinds(), PipelineStages() {}
+
   ~SILPassPipelinePlan() = default;
   SILPassPipelinePlan(const SILPassPipelinePlan &) = default;
 
+  const SILOptions &getOptions() const { return Options; }
+
 // Each pass gets its own add-function.
-#define PASS(ID, NAME, DESCRIPTION)                                            \
-  void add##ID() { Kinds.push_back(PassKind::ID); }
+#define PASS(ID, TAG, NAME)                                                    \
+  void add##ID() {                                                             \
+    assert(!PipelineStages.empty() && "startPipeline before adding passes.");  \
+    Kinds.push_back(PassKind::ID);                                             \
+  }
 #include "swift/SILOptimizer/PassManager/Passes.def"
 
   void addPasses(ArrayRef<PassKind> PassKinds);
 
 #define PASSPIPELINE(NAME, DESCRIPTION)                                        \
-  static SILPassPipelinePlan get##NAME##PassPipeline();
-#define PASSPIPELINE_WITH_OPTIONS(NAME, DESCRIPTION)                           \
-  static SILPassPipelinePlan get##NAME##PassPipeline(SILOptions Options);
+  static SILPassPipelinePlan get##NAME##PassPipeline(const SILOptions &Options);
 #include "swift/SILOptimizer/PassManager/PassPipeline.def"
 
-  static SILPassPipelinePlan getPassPipelineForKinds(ArrayRef<PassKind> Kinds);
-  static SILPassPipelinePlan getPassPipelineFromFile(StringRef Filename);
+  static SILPassPipelinePlan getPassPipelineForKinds(const SILOptions &Options,
+                                                     ArrayRef<PassKind> Kinds);
+  static SILPassPipelinePlan getPassPipelineFromFile(const SILOptions &Options,
+                                                     StringRef Filename);
 
   /// Our general format is as follows:
   ///
@@ -79,7 +87,7 @@ public:
 
   void print(llvm::raw_ostream &os);
 
-  void startPipeline(StringRef Name = "");
+  void startPipeline(StringRef Name = "", bool isFunctionPassPipeline = false);
   using PipelineKindIterator = decltype(Kinds)::const_iterator;
   using PipelineKindRange = iterator_range<PipelineKindIterator>;
   iterator_range<PipelineKindIterator>
@@ -90,17 +98,58 @@ public:
   PipelineRange getPipelines() const {
     return {PipelineStages.begin(), PipelineStages.end()};
   }
+
+  friend bool operator==(const SILPassPipelinePlan &lhs,
+                         const SILPassPipelinePlan &rhs) {
+    // FIXME: Comparing the SILOptions by identity should work in practice, but
+    // we don't currently prevent them from being copied. We should consider
+    // either making them move-only, or properly implementing == for them.
+    return &lhs.Options == &rhs.Options && lhs.Kinds == rhs.Kinds &&
+           lhs.PipelineStages == rhs.PipelineStages;
+  }
+
+  friend bool operator!=(const SILPassPipelinePlan &lhs,
+                         const SILPassPipelinePlan &rhs) {
+    return !(lhs == rhs);
+  }
+
+  friend llvm::hash_code hash_value(const SILPassPipelinePlan &plan) {
+    using namespace llvm;
+    auto &kinds = plan.Kinds;
+    auto &stages = plan.PipelineStages;
+    return hash_combine(&plan.Options,
+                        hash_combine_range(kinds.begin(), kinds.end()),
+                        hash_combine_range(stages.begin(), stages.end()));
+  }
 };
 
 struct SILPassPipeline final {
   unsigned ID;
   StringRef Name;
   unsigned KindOffset;
+  bool isFunctionPassPipeline;
+
+  friend bool operator==(const SILPassPipeline &lhs,
+                         const SILPassPipeline &rhs) {
+    return lhs.ID == rhs.ID && lhs.Name.equals(rhs.Name) &&
+           lhs.KindOffset == rhs.KindOffset;
+  }
+
+  friend bool operator!=(const SILPassPipeline &lhs,
+                         const SILPassPipeline &rhs) {
+    return !(lhs == rhs);
+  }
+
+  friend llvm::hash_code hash_value(const SILPassPipeline &pipeline) {
+    return llvm::hash_combine(pipeline.ID, pipeline.Name, pipeline.KindOffset);
+  }
 };
 
-inline void SILPassPipelinePlan::startPipeline(StringRef Name) {
+inline void SILPassPipelinePlan::
+startPipeline(StringRef Name, bool isFunctionPassPipeline) {
   PipelineStages.push_back(SILPassPipeline{
-      unsigned(PipelineStages.size()), Name, unsigned(Kinds.size())});
+      unsigned(PipelineStages.size()), Name, unsigned(Kinds.size()),
+      isFunctionPassPipeline});
 }
 
 inline SILPassPipelinePlan::PipelineKindRange

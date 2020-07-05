@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -241,6 +241,8 @@ ArrayRef<MarkupASTNode *> MarkupASTNode::getChildren() {
 #define MARKUP_AST_NODE_RANGE(Id, FirstId, LastId)
 #include "swift/Markup/ASTNodes.def"
   }
+
+  llvm_unreachable("Unhandled ASTNodeKind in switch.");
 }
 
 ArrayRef<const MarkupASTNode *> MarkupASTNode::getChildren() const {
@@ -252,6 +254,8 @@ return cast<Id>(this)->getChildren();
 #define MARKUP_AST_NODE_RANGE(Id, FirstId, LastId)
 #include "swift/Markup/ASTNodes.def"
   }
+
+  llvm_unreachable("Unhandled ASTNodeKind in switch.");
 }
 
 void swift::markup::printInlinesUnder(const MarkupASTNode *Node,
@@ -259,7 +263,7 @@ void swift::markup::printInlinesUnder(const MarkupASTNode *Node,
                                      bool PrintDecorators) {
   auto printChildren = [](const ArrayRef<const MarkupASTNode *> Children,
                           llvm::raw_ostream &OS) {
-    for (auto Child = Children.begin(); Child != Children.end(); Child++)
+    for (auto Child = Children.begin(); Child != Children.end(); ++Child)
       swift::markup::printInlinesUnder(*Child, OS);
   };
 
@@ -362,7 +366,7 @@ void swift::markup::dump(const MarkupASTNode *Node, llvm::raw_ostream &OS,
   auto dumpChildren = [](const ArrayRef<const MarkupASTNode *> Children,
                          llvm::raw_ostream &OS, unsigned indent) {
     OS << '\n';
-    for (auto Child = Children.begin(); Child != Children.end(); Child++) {
+    for (auto Child = Children.begin(); Child != Children.end(); ++Child) {
       swift::markup::dump(*Child, OS, indent + 1);
       if (Child != Children.end() - 1)
         OS << '\n';

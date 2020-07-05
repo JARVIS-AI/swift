@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -25,13 +25,11 @@ RValue emitUnconditionalCheckedCast(SILGenFunction &SGF,
                                     CheckedCastKind castKind,
                                     SGFContext C);
 
-RValue emitConditionalCheckedCast(SILGenFunction &SGF,
-                                  SILLocation loc,
-                                  ManagedValue operand,
-                                  Type operandType,
-                                  Type targetType,
-                                  CheckedCastKind castKind,
-                                  SGFContext C);
+RValue emitConditionalCheckedCast(SILGenFunction &SGF, SILLocation loc,
+                                  ManagedValue operand, Type operandType,
+                                  Type targetType, CheckedCastKind castKind,
+                                  SGFContext C, ProfileCounter TrueCount,
+                                  ProfileCounter FalseCount);
 
 SILValue emitIsa(SILGenFunction &SGF, SILLocation loc,
                  Expr *operand, Type targetType,

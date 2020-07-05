@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -40,6 +40,11 @@ public:
 
     if (auto BuiltinKind = BI->getBuiltinKind()) {
       switch (BuiltinKind.getValue()) {
+      // BUILTIN_TYPE_CHECKER_OPERATION does not live past the type checker.
+#define BUILTIN_TYPE_CHECKER_OPERATION(ID, NAME)                               \
+  case BuiltinValueKind::ID:                                                   \
+    llvm_unreachable("Unexpected type checker operation seen in SIL!");
+
 #define BUILTIN(ID, NAME, ATTRS)                                               \
   case BuiltinValueKind::ID:                                                   \
     return asImpl().visit##ID(BI, ATTRS);

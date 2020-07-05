@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -12,6 +12,7 @@
 
 #include "ModuleAPIDiff.h"
 #include "swift/AST/DiagnosticEngine.h"
+#include "swift/AST/GenericSignature.h"
 #include "swift/AST/ASTVisitor.h"
 #include "swift/Basic/SourceManager.h"
 #include "swift/Driver/FrontendUtil.h"
@@ -83,10 +84,9 @@ generic-signature ::=
     GenericSignature:
         GenericParams:                  (ordered)
             - Name: <identifier>
-              (Superclass: <type-name>)?
         ConformanceRequirements:
             - Type: <type-name>
-              Protocol: <type-name>
+              ProtocolOrClass: <type-name>
         SameTypeRequirements:
             - FirstType: <type-name>
               SecondType: <type-name>
@@ -233,7 +233,7 @@ decl-attributes ::=
       return ScalarTraits<std::string>::input(Scalar, Context,                 \
                                               Val.STRING_MEMBER_NAME);         \
     }                                                                          \
-    static bool mustQuote(StringRef S) {                                       \
+    static QuotingType mustQuote(StringRef S) {                                \
       return ScalarTraits<std::string>::mustQuote(S);                          \
     }                                                                          \
   };                                                                           \
@@ -320,7 +320,6 @@ bool operator==(const NestedDecls &LHS, const NestedDecls &RHS) {
 
 struct GenericParam {
   Identifier Name;
-  Optional<TypeName> Superclass;
 };
 
 struct ConformanceRequirement {
@@ -507,7 +506,6 @@ template <> struct MappingTraits<::swift::sma::NestedDecls> {
 template <> struct MappingTraits<::swift::sma::GenericParam> {
   static void mapping(IO &io, ::swift::sma::GenericParam &ND) {
     io.mapRequired("Name", ND.Name);
-    io.mapOptional("Superclass", ND.Superclass);
   }
 };
 
@@ -738,16 +736,13 @@ public:
   }
 
   llvm::Optional<sma::GenericSignature>
-  convertToGenericSignature(GenericSignature *GS) {
+  convertToGenericSignature(GenericSignature GS) {
     if (!GS)
       return None;
     sma::GenericSignature ResultGS;
     for (auto *GTPT : GS->getGenericParams()) {
       sma::GenericParam ResultGP;
       ResultGP.Name = convertToIdentifier(GTPT->getName());
-      if (auto SuperclassTy = GTPT->getSuperclass(nullptr)) {
-        ResultGP.Superclass = convertToTypeName(SuperclassTy);
-      }
       ResultGS.GenericParams.emplace_back(std::move(ResultGP));
     }
     for (auto &Req : GS->getRequirements()) {
@@ -758,6 +753,10 @@ public:
             sma::ConformanceRequirement{
                 convertToTypeName(Req.getFirstType()),
                 convertToTypeName(Req.getSecondType())});
+        break;
+      case RequirementKind::Layout:
+        // FIXME
+        assert(false && "Not implemented");
         break;
       case RequirementKind::SameType:
         ResultGS.SameTypeRequirements.emplace_back(
@@ -770,8 +769,10 @@ public:
   }
 
   std::vector<sma::TypeName> collectProtocolConformances(NominalTypeDecl *NTD) {
+    const auto AllProtocols = NTD->getAllProtocols();
     std::vector<sma::TypeName> Result;
-    for (const auto *PD : NTD->getAllProtocols()) {
+    Result.reserve(AllProtocols.size());
+    for (const auto *PD : AllProtocols) {
       Result.emplace_back(convertToTypeName(PD->getDeclaredType()));
     }
     return Result;
@@ -832,7 +833,7 @@ public:
   void visitTypeAliasDecl(TypeAliasDecl *TAD) {
     auto ResultTD = std::make_shared<sma::TypealiasDecl>();
     ResultTD->Name = convertToIdentifier(TAD->getName());
-    ResultTD->Type = convertToTypeName(TAD->getUnderlyingTypeLoc().getType());
+    ResultTD->Type = convertToTypeName(TAD->getUnderlyingType());
     // FIXME
     // ResultTD->Attributes = ?;
     Result.Typealiases.emplace_back(std::move(ResultTD));
@@ -874,7 +875,7 @@ public:
   }
 };
 
-std::shared_ptr<sma::Module> createSMAModel(Module *M) {
+std::shared_ptr<sma::Module> createSMAModel(ModuleDecl *M) {
   SmallVector<Decl *, 1> Decls;
   M->getDisplayDecls(Decls);
 
@@ -908,27 +909,30 @@ int swift::doGenerateModuleAPIDescription(StringRef MainExecutablePath,
   DiagnosticEngine Diags(SM);
   Diags.addConsumer(PDC);
 
-  std::unique_ptr<CompilerInvocation> Invocation =
-      driver::createCompilerInvocation(CStringArgs, Diags);
+  CompilerInvocation Invocation;
+  bool HadError = driver::getSingleFrontendInvocationFromDriverArguments(
+      CStringArgs, Diags, [&](ArrayRef<const char *> FrontendArgs) {
+    return Invocation.parseArgs(FrontendArgs, Diags);
+  });
 
-  if (!Invocation) {
+  if (HadError) {
     llvm::errs() << "error: unable to create a CompilerInvocation\n";
     return 1;
   }
 
-  Invocation->setMainExecutablePath(MainExecutablePath);
+  Invocation.setMainExecutablePath(MainExecutablePath);
 
   CompilerInstance CI;
   CI.addDiagnosticConsumer(&PDC);
-  if (CI.setup(*Invocation))
+  if (CI.setup(Invocation))
     return 1;
   CI.performSema();
 
   PrintOptions Options = PrintOptions::printEverything();
 
-  Module *M = CI.getMainModule();
-  M->getMainSourceFile(Invocation->getSourceFileKind()).print(llvm::outs(),
-                                                        Options);
+  ModuleDecl *M = CI.getMainModule();
+  M->getMainSourceFile(Invocation.getSourceFileKind()).print(llvm::outs(),
+                                                             Options);
 
   auto SMAModel = createSMAModel(M);
   llvm::yaml::Output YOut(llvm::outs());

@@ -3,7 +3,7 @@
 #
 # This source file is part of the Swift.org open source project
 #
-# Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+# Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 # Licensed under Apache License v2.0 with Runtime Library Exception
 #
 # See https://swift.org/LICENSE.txt for license information
@@ -13,6 +13,7 @@ from __future__ import print_function
 
 import argparse
 import collections
+import csv
 import glob
 import os
 import sys
@@ -24,7 +25,7 @@ from cmpcodesize.compare import \
 
 SHORTCUTS = {
     "O": "bin/Benchmark_O",
-    "Ounchecked": "bin/Benchmark_Ounchecked",
+    "Osize": "bin/Benchmark_Osize",
     "Onone": "bin/Benchmark_Onone",
     "dylib": "lib/swift/macosx/x86_64/libswiftCore.dylib",
 }
@@ -53,7 +54,7 @@ How to specify files:
     Compares the files in the new and old build-dirs.
     Aliases:
         O          => bin/Benchmark_O
-        Ounchecked => bin/Benchmark_Ounchecked
+        Osize      => bin/Benchmark_Osize
         Onone      => bin/Benchmark_Onone
         dylib      => lib/swift/macosx/x86_64/libswiftCore.dylib
     Examples:
@@ -81,6 +82,11 @@ How to specify files:
                         action='store_true',
                         dest='all_sections',
                         default=False)
+    parser.add_argument('-z', '--additional-segments',
+                        help='Show sizes of additional segments.',
+                        action='store_true',
+                        dest='all_segments',
+                        default=False)
     parser.add_argument('-c', '--category',
                         help='Show functions by category.',
                         action='store_true',
@@ -101,6 +107,23 @@ How to specify files:
                         action='store_true',
                         dest='sum_sizes',
                         default=False)
+    parser.add_argument('-p', '--parseable',
+                        help='Generate output as CSV that can be parsed by ' +
+                             'other programs.',
+                        action='store_true',
+                        default=False)
+    parser.add_argument('-o', '--old-build-directory',
+                        help='The directory containing the baseline objects ' +
+                             'against which to compare sizes.',
+                        action='store',
+                        dest='old_build_dir',
+                        default=None)
+    parser.add_argument('-n', '--new-build-directory',
+                        help='The directory containing the new objects whose' +
+                             'sizes are to be compared against the baseline.',
+                        action='store',
+                        dest='new_build_dir',
+                        default=None)
 
     # Positional arguments.
     # These can be specified in means beyond what argparse supports,
@@ -120,13 +143,18 @@ How to specify files:
         # exclusivity among options, not among groups of options, so
         # we detect this case manually.
         assert (not parsed_arguments.all_sections and
+                not parsed_arguments.all_segments and
                 not parsed_arguments.list_categories), \
             'Incorrect usage: --list cannot be specified in conjunction ' + \
-            'with --additional-sections or --category.'
+            'with --additional-sections or --additional-segments or --category.'
         # A file must be specified when using --list.
         assert parsed_arguments.files, \
             'Incorrect usage: Must specify between one and two files when ' + \
             'using --list, but you specified no files.'
+
+    csv_out = None
+    if parsed_arguments.parseable:
+        csv_out = csv.writer(sys.stdout)
 
     if separator_token in parsed_arguments.files:
         separator_index = parsed_arguments.files.index(separator_token)
@@ -135,8 +163,12 @@ How to specify files:
     else:
         old_file_args = parsed_arguments.files
 
-        old_build_dir = os.environ.get("SWIFT_OLD_BUILDDIR")
-        new_build_dir = os.environ.get("SWIFT_NEW_BUILDDIR")
+        old_build_dir = parsed_arguments.old_build_dir
+        if not old_build_dir:
+            old_build_dir = os.environ.get("SWIFT_OLD_BUILDDIR")
+        new_build_dir = parsed_arguments.new_build_dir
+        if not new_build_dir:
+            new_build_dir = os.environ.get("SWIFT_NEW_BUILDDIR")
 
         if not parsed_arguments.files:
             assert old_build_dir and new_build_dir, \
@@ -181,14 +213,21 @@ How to specify files:
                 read_sizes(sizes, file, True, False)
             print(os.linesep.join(list_function_sizes(sizes.items())))
         else:
-            compare_function_sizes(old_files, new_files)
+            compare_function_sizes(old_files, new_files, csv=csv_out)
     else:
-        print("%-26s%16s  %8s  %8s  %s" %
-              ("", "Section", "Old", "New", "Percent"))
+        if csv_out:
+            csv_out.writerow(["Title", "Section", "Old", "Old Relative",
+                              "New", "New Relative", "Percentage Change"])
+        else:
+            print("%-26s%16s  %14s  %14s  %s" %
+                  ("Title", "Section", "Old", "New", "Percent"))
+
         if parsed_arguments.sum_sizes:
             compare_sizes_of_file(old_files, new_files,
                                   parsed_arguments.all_sections,
-                                  parsed_arguments.list_categories)
+                                  parsed_arguments.all_segments,
+                                  parsed_arguments.list_categories,
+                                  csv=csv_out)
         else:
             if len(old_files) != len(new_files):
                 sys.exit("number of new files must be the same of old files")
@@ -199,7 +238,10 @@ How to specify files:
             for old_file, new_file in zip(old_files, new_files):
                 compare_sizes_of_file([old_file], [new_file],
                                       parsed_arguments.all_sections,
-                                      parsed_arguments.list_categories)
+                                      parsed_arguments.all_segments,
+                                      parsed_arguments.list_categories,
+                                      csv=csv_out)
+
 
 if __name__ == '__main__':
     main()

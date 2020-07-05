@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -14,13 +14,14 @@
 #define SWIFT_PARSER_PARSER_RESULT_H
 
 #include "llvm/ADT/PointerIntPair.h"
+#include "swift/AST/ParameterList.h"
 #include <type_traits>
 
 namespace swift {
 
 class ParserStatus;
 
-/// \brief A wrapper for a parser AST node result (Decl, Stmt, Expr, Pattern,
+/// A wrapper for a parser AST node result (Decl, Stmt, Expr, Pattern,
 /// etc.)
 ///
 /// Contains the pointer to the AST node itself (or null) and additional bits
@@ -122,7 +123,7 @@ static inline ParserResult<T> makeParserCodeCompletionResult(T *Result =
   return PR;
 }
 
-/// \brief Same as \c ParserResult, but just the status bits without the AST
+/// Same as \c ParserResult, but just the status bits without the AST
 /// node.
 ///
 /// Useful when the AST node is returned by some other means (for example, in

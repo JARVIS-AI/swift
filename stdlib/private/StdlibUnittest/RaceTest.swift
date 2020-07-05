@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -38,11 +38,14 @@
 
 import SwiftPrivate
 import SwiftPrivateLibcExtras
-import SwiftPrivatePthreadExtras
-#if os(OSX) || os(iOS)
+import SwiftPrivateThreadExtras
+#if canImport(Darwin)
 import Darwin
-#elseif os(Linux) || os(FreeBSD) || os(PS4) || os(Android)
+#elseif canImport(Glibc)
 import Glibc
+#elseif os(Windows)
+import MSVCRT
+import WinSDK
 #endif
 
 #if _runtime(_ObjC)
@@ -395,7 +398,7 @@ class _RaceTestSharedState<RT : RaceTestWithPerTrialData> {
   var stopNow = _stdlib_AtomicInt(0)
 
   var trialBarrier: _stdlib_Barrier
-  var trialSpinBarrier: _stdlib_AtomicInt = _stdlib_AtomicInt()
+  var trialSpinBarrier = _stdlib_AtomicInt()
 
   var raceData: [RT.RaceData] = []
   var workerStates: [_RaceTestWorkerState<RT>] = []
@@ -413,9 +416,7 @@ class _RaceTestSharedState<RT : RaceTestWithPerTrialData> {
   }
 }
 
-func _masterThreadStopWorkers<RT : RaceTestWithPerTrialData>(
-    _ sharedState: _RaceTestSharedState<RT>
-) {
+func _masterThreadStopWorkers<RT>( _ sharedState: _RaceTestSharedState<RT>) {
   // Workers are proceeding to the first barrier in _workerThreadOneTrial.
   sharedState.stopNow.store(1)
   // Allow workers to proceed past that first barrier. They will then see
@@ -423,16 +424,14 @@ func _masterThreadStopWorkers<RT : RaceTestWithPerTrialData>(
   sharedState.trialBarrier.wait()
 }
 
-func _masterThreadOneTrial<RT : RaceTestWithPerTrialData>(
-  _ sharedState: _RaceTestSharedState<RT>
-) {
+func _masterThreadOneTrial<RT>(_ sharedState: _RaceTestSharedState<RT>) {
   let racingThreadCount = sharedState.racingThreadCount
   let raceDataCount = racingThreadCount * racingThreadCount
   let rt = RT()
 
   sharedState.raceData.removeAll(keepingCapacity: true)
 
-  sharedState.raceData.append(contentsOf: (0..<raceDataCount).lazy.map { i in
+  sharedState.raceData.append(contentsOf: (0..<raceDataCount).lazy.map { _ in
     rt.makeRaceData()
   })
 
@@ -440,11 +439,11 @@ func _masterThreadOneTrial<RT : RaceTestWithPerTrialData>(
   sharedState.workerStates.removeAll(keepingCapacity: true)
   
   sharedState.workerStates.append(contentsOf: (0..<racingThreadCount).lazy.map {
-    i in
+    _ in
     let workerState = _RaceTestWorkerState<RT>()
 
     // Shuffle the data so that threads process it in different order.
-    let shuffle = randomShuffle(identityShuffle)
+    let shuffle = identityShuffle.shuffled()
     workerState.raceData = scatter(sharedState.raceData, shuffle)
     workerState.raceDataShuffle = shuffle
 
@@ -485,7 +484,7 @@ func _masterThreadOneTrial<RT : RaceTestWithPerTrialData>(
   }
 }
 
-func _workerThreadOneTrial<RT : RaceTestWithPerTrialData>(
+func _workerThreadOneTrial<RT>(
   _ tid: Int, _ sharedState: _RaceTestSharedState<RT>
 ) -> Bool {
   sharedState.trialBarrier.wait()
@@ -512,6 +511,36 @@ func _workerThreadOneTrial<RT : RaceTestWithPerTrialData>(
 }
 
 /// One-shot sleep in one thread, allowing interrupt by another.
+#if os(Windows)
+class _InterruptibleSleep {
+  let event: HANDLE?
+  var completed: Bool = false
+
+  init() {
+    self.event = CreateEventW(nil, true, false, nil)
+    precondition(self.event != nil)
+  }
+
+  deinit {
+    CloseHandle(self.event)
+  }
+
+  func sleep(durationInSeconds duration: Int) {
+    guard completed == false else { return }
+
+    let result: DWORD = WaitForSingleObject(event, DWORD(duration * 1000))
+    precondition(result == WAIT_OBJECT_0)
+
+    completed = true
+  }
+
+  func wake() {
+    guard completed == false else { return }
+    let result: Bool = SetEvent(self.event)
+    precondition(result == true)
+  }
+}
+#else
 class _InterruptibleSleep {
   let writeEnd: CInt
   let readEnd: CInt
@@ -533,7 +562,9 @@ class _InterruptibleSleep {
       return
     }
 
-    var timeout = timeval(tv_sec: duration, tv_usec: 0)
+    // WebAssembly/WASI on wasm32 is the only 32-bit platform with Int64 time_t,
+    // needs an explicit conversion to `time_t` because of this.
+    var timeout = timeval(tv_sec: time_t(duration), tv_usec: 0)
 
     var readFDs = _stdlib_fd_set()
     var writeFDs = _stdlib_fd_set()
@@ -554,6 +585,13 @@ class _InterruptibleSleep {
     precondition(ret >= 0)
   }
 }
+#endif
+
+#if os(Windows)
+typealias ThreadHandle = HANDLE
+#else
+typealias ThreadHandle = pthread_t
+#endif
 
 public func runRaceTest<RT : RaceTestWithPerTrialData>(
   _: RT.Type,
@@ -604,43 +642,40 @@ public func runRaceTest<RT : RaceTestWithPerTrialData>(
     _ = timeoutReached.fetchAndAdd(1)
   }
 
-  var testTids = [pthread_t]()
-  var alarmTid: pthread_t
+  var testTids = [ThreadHandle]()
+  var alarmTid: ThreadHandle
 
   // Create the master thread.
   do {
-    let (ret, tid) = _stdlib_pthread_create_block(
-      nil, masterThreadBody, ())
+    let (ret, tid) = _stdlib_thread_create_block(masterThreadBody, ())
     expectEqual(0, ret)
     testTids.append(tid!)
   }
 
   // Create racing threads.
   for i in 0..<racingThreadCount {
-    let (ret, tid) = _stdlib_pthread_create_block(
-      nil, racingThreadBody, i)
+    let (ret, tid) = _stdlib_thread_create_block(racingThreadBody, i)
     expectEqual(0, ret)
     testTids.append(tid!)
   }
 
   // Create the alarm thread that enforces the timeout.
   do {
-    let (ret, tid) = _stdlib_pthread_create_block(
-      nil, alarmThreadBody, ())
+    let (ret, tid) = _stdlib_thread_create_block(alarmThreadBody, ())
     expectEqual(0, ret)
     alarmTid = tid!
   }
 
   // Join all testing threads.
   for tid in testTids {
-    let (ret, _) = _stdlib_pthread_join(tid, Void.self)
+    let (ret, _) = _stdlib_thread_join(tid, Void.self)
     expectEqual(0, ret)
   }
 
   // Tell the alarm thread to stop if it hasn't already, then join it.
   do {
     alarmTimer.wake()
-    let (ret, _) = _stdlib_pthread_join(alarmTid, Void.self)
+    let (ret, _) = _stdlib_thread_join(alarmTid, Void.self)
     expectEqual(0, ret)
   }
 
@@ -678,7 +713,7 @@ public func consumeCPU(units amountOfWork: Int) {
 }
 
 internal struct ClosureBasedRaceTest : RaceTestWithPerTrialData {
-  static var thread: () -> () = {}
+  static var thread: () -> Void = {}
 
   class RaceData {}
   typealias ThreadLocalData = Void
@@ -703,7 +738,7 @@ public func runRaceTest(
   trials: Int,
   timeoutInSeconds: Int? = nil,
   threads: Int? = nil,
-  invoking body: @escaping () -> ()
+  invoking body: @escaping () -> Void
 ) {
   ClosureBasedRaceTest.thread = body
   runRaceTest(ClosureBasedRaceTest.self, trials: trials,
@@ -714,7 +749,7 @@ public func runRaceTest(
   operations: Int,
   timeoutInSeconds: Int? = nil,
   threads: Int? = nil,
-  invoking body: @escaping () -> ()
+  invoking body: @escaping () -> Void
 ) {
   ClosureBasedRaceTest.thread = body
   runRaceTest(ClosureBasedRaceTest.self, operations: operations,

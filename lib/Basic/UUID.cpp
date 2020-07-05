@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -16,12 +16,15 @@
 //===----------------------------------------------------------------------===//
 
 #include "swift/Basic/UUID.h"
+#include "llvm/ADT/SmallString.h"
 
 // WIN32 doesn't natively support <uuid/uuid.h>. Instead, we use Win32 APIs.
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
-#include <rpc.h>
+#define NOMINMAX
+#include <objbase.h>
 #include <string>
+#include <algorithm>
 #else
 #include <uuid/uuid.h>
 #endif
@@ -31,7 +34,7 @@ using namespace swift;
 swift::UUID::UUID(FromRandom_t) {
 #if defined(_WIN32)
   ::UUID uuid;
-  UuidCreate(&uuid);
+  ::CoCreateGuid(&uuid);
 
   memcpy(Value, &uuid, Size);
 #else
@@ -42,7 +45,7 @@ swift::UUID::UUID(FromRandom_t) {
 swift::UUID::UUID(FromTime_t) {
 #if defined(_WIN32)
   ::UUID uuid;
-  UuidCreate(&uuid);
+  ::CoCreateGuid(&uuid);
 
   memcpy(Value, &uuid, Size);
 #else
@@ -93,6 +96,7 @@ void swift::UUID::toString(llvm::SmallVectorImpl<char> &out) const {
 
   char* signedStr = reinterpret_cast<char*>(str);
   memcpy(out.data(), signedStr, StringBufferSize);
+  std::transform(std::begin(out), std::end(out), std::begin(out), toupper);
 #else
   uuid_unparse_upper(Value, out.data());
 #endif

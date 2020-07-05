@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -12,12 +12,23 @@
 
 import TestsUtils
 
+public let Dictionary2 = [
+  BenchmarkInfo(name: "Dictionary2",
+    runFunction: run_Dictionary2,
+    tags: [.validation, .api, .Dictionary],
+    legacyFactor: 5),
+  BenchmarkInfo(name: "Dictionary2OfObjects",
+    runFunction: run_Dictionary2OfObjects,
+    tags: [.validation, .api, .Dictionary],
+    legacyFactor: 5),
+]
+
 @inline(never)
 public func run_Dictionary2(_ N: Int) {
   let size = 500
   let ref_result = 199
   var res = 0
-  for _ in 1...5*N {
+  for _ in 1...N {
     var x: [String: Int] = [:]
     for i in 1...size {
       x[String(i, radix:16)] = i
@@ -34,31 +45,32 @@ public func run_Dictionary2(_ N: Int) {
       break
     }
   }
-  CheckResults(res == ref_result, "Incorrect results in Dictionary2: \(res) != \(ref_result)")
+  CheckResults(res == ref_result)
 }
 
-class Box<T : Hashable> : Hashable where T : Equatable {
+class Box<T : Hashable> : Hashable {
   var value: T
 
   init(_ v: T) {
     value = v
   }
 
-  var hashValue: Int {
-    return value.hashValue
+  func hash(into hasher: inout Hasher) {
+    hasher.combine(value)
   }
 
-  static func ==<T: Equatable>(lhs: Box<T>, rhs: Box<T>) -> Bool {
+  static func ==(lhs: Box, rhs: Box) -> Bool {
     return lhs.value == rhs.value
   }
 }
 
 @inline(never)
 public func run_Dictionary2OfObjects(_ N: Int) {
+
   let size = 500
   let ref_result = 199
   var res = 0
-  for _ in 1...5*N {
+  for _ in 1...N {
     var x: [Box<String>:Box<Int>] = [:]
     for i in 1...size {
       x[Box(String(i, radix:16))] = Box(i)
@@ -75,5 +87,5 @@ public func run_Dictionary2OfObjects(_ N: Int) {
       break
     }
   }
-  CheckResults(res == ref_result, "Incorrect results in Dictionary2AllObjects: \(res) != \(ref_result)")
+  CheckResults(res == ref_result)
 }

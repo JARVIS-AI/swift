@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -51,7 +51,7 @@ class SILDebugInfoGenerator : public SILModuleTransform {
     uint64_t Pos = 0;
 
     void write_impl(const char *Ptr, size_t Size) override {
-      for (size_t Idx = 0; Idx < Size; Idx++) {
+      for (size_t Idx = 0; Idx < Size; ++Idx) {
         char c = Ptr[Idx];
         if (c == '\n')
         ++LineNum;
@@ -95,7 +95,7 @@ class SILDebugInfoGenerator : public SILModuleTransform {
     if (FileBaseName.empty())
       return;
 
-    DEBUG(llvm::dbgs() << "** SILDebugInfoGenerator **\n");
+    LLVM_DEBUG(llvm::dbgs() << "** SILDebugInfoGenerator **\n");
 
     std::vector<SILFunction *> PrintedFuncs;
     int FileIdx = 0;
@@ -110,7 +110,7 @@ class SILDebugInfoGenerator : public SILModuleTransform {
       char *FileNameBuf = (char *)M->allocate(FileName.size() + 1, 1);
       strcpy(FileNameBuf, FileName.c_str());
 
-      DEBUG(llvm::dbgs() << "Write debug SIL file " << FileName << '\n');
+      LLVM_DEBUG(llvm::dbgs() << "Write debug SIL file " << FileName << '\n');
 
       std::error_code EC;
       llvm::raw_fd_ostream OutFile(FileName, EC,
@@ -128,7 +128,7 @@ class SILDebugInfoGenerator : public SILModuleTransform {
         SILLocation::DebugLoc DL(Ctx.LCS.LineNum, 1, FileNameBuf);
         RegularLocation Loc(DL);
         SILDebugScope *Scope = new (*M) SILDebugScope(Loc, F);
-        F->setDebugScope(Scope);
+        F->setSILDebugScope(Scope);
 
         // Ensure that the function is visible for debugging.
         F->setBare(IsNotBare);
@@ -141,16 +141,24 @@ class SILDebugInfoGenerator : public SILModuleTransform {
       for (SILFunction *F : PrintedFuncs) {
         const SILDebugScope *Scope = F->getDebugScope();
         for (SILBasicBlock &BB : *F) {
-          for (SILInstruction &I : BB) {
-            SILLocation Loc = I.getLoc();
-            SILLocation::DebugLoc DL(Ctx.LineNums[&I], 1, FileNameBuf);
+          for (auto iter = BB.begin(), end = BB.end(); iter != end;) {
+            SILInstruction *I = &*iter;
+            ++iter;
+            if (isa<DebugValueInst>(I) || isa<DebugValueAddrInst>(I)) {
+              // debug_value and debug_value_addr are not needed anymore.
+              // Also, keeping them might trigger a verifier error.
+              I->eraseFromParent();
+              continue;
+            }
+            SILLocation Loc = I->getLoc();
+            SILLocation::DebugLoc DL(Ctx.LineNums[I], 1, FileNameBuf);
             assert(DL.Line && "no line set for instruction");
             if (Loc.is<ReturnLocation>() || Loc.is<ImplicitReturnLocation>()) {
               Loc.setDebugInfoLoc(DL);
-              I.setDebugLocation(SILDebugLocation(Loc, Scope));
+              I->setDebugLocation(SILDebugLocation(Loc, Scope));
             } else {
               RegularLocation RLoc(DL);
-              I.setDebugLocation(SILDebugLocation(RLoc, Scope));
+              I->setDebugLocation(SILDebugLocation(RLoc, Scope));
             }
           }
         }
@@ -159,7 +167,6 @@ class SILDebugInfoGenerator : public SILModuleTransform {
     }
   }
 
-  StringRef getName() override { return "SILDebugInfoGenerator"; }
 };
 
 } // end anonymous namespace

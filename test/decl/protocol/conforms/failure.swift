@@ -75,7 +75,7 @@ struct P5Conformer : P5 { // expected-error {{does not conform}}
 
 
 protocol P6Base {
-  associatedtype Foo // expected-note {{protocol requires nested type 'Foo'; do you want to add it?}}
+  associatedtype Foo // expected-note{{protocol requires nested type 'Foo'; do you want to add it?}}
   func foo()
   func bar() -> Foo
 }
@@ -97,12 +97,13 @@ struct P6Conformer : P6 { // expected-error 2 {{does not conform}}
 // expected-error@+1{{type 'A' does not conform to protocol 'RawRepresentable'}}
 struct A: OptionSet {
   let rawValue = 0
-  init() { } // expected-note 2{{candidate has non-matching type '()'}}
+  init() { }
 }
 
+// Type witness cannot have its own generic parameters
 // FIXME: Crappy diagnostic
 protocol PA {
-  associatedtype A // expected-note 2 {{protocol requires nested type 'A'; do you want to add it?}}
+  associatedtype A // expected-note 3 {{protocol requires nested type 'A'; do you want to add it?}}
 }
 
 struct BadCase1 : PA { // expected-error {{type 'BadCase1' does not conform to protocol 'PA'}}
@@ -112,3 +113,21 @@ struct BadCase1 : PA { // expected-error {{type 'BadCase1' does not conform to p
 struct BadCase2 : PA { // expected-error {{type 'BadCase2' does not conform to protocol 'PA'}}
   typealias A<T> = T
 }
+
+// Variation on the above
+struct G<T> {}
+
+struct BadCase3 : PA { // expected-error {{type 'BadCase3' does not conform to protocol 'PA'}}
+  typealias A = G
+}
+
+// rdar://problem/32215763
+extension UInt32: ExpressibleByStringLiteral {}
+// expected-error@-1 {{type 'UInt32' does not conform to protocol 'ExpressibleByStringLiteral'}}
+// expected-error@-2 {{type 'UInt32' does not conform to protocol 'ExpressibleByExtendedGraphemeClusterLiteral'}}
+// expected-error@-3 {{type 'UInt32' does not conform to protocol 'ExpressibleByUnicodeScalarLiteral'}}
+
+// After successfully type-checking this (due to the presumption of
+// the type actually conforming), do not crash when failing to find
+// the associated witness type.
+let diagnose: UInt32 = "reta"

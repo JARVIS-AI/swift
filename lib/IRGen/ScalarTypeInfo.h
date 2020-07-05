@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -42,30 +42,30 @@ protected:
   }
 
 public:
-  void initializeFromParams(IRGenFunction &IGF, Explosion &params,
-                            Address dest, SILType T) const override {
-    asDerived().Derived::initialize(IGF, params, dest);
+  void initializeFromParams(IRGenFunction &IGF, Explosion &params, Address dest,
+                            SILType T, bool isOutlined) const override {
+    asDerived().Derived::initialize(IGF, params, dest, isOutlined);
   }
 
   void initializeWithCopy(IRGenFunction &IGF, Address dest, Address src,
-                          SILType T) const override {
+                          SILType T, bool isOutlined) const override {
     Explosion temp;
     asDerived().Derived::loadAsCopy(IGF, src, temp);
-    asDerived().Derived::initialize(IGF, temp, dest);
+    asDerived().Derived::initialize(IGF, temp, dest, isOutlined);
   }
 
-  void assignWithCopy(IRGenFunction &IGF, Address dest, Address src,
-                      SILType T) const override {
+  void assignWithCopy(IRGenFunction &IGF, Address dest, Address src, SILType T,
+                      bool isOutlined) const override {
     Explosion temp;
     asDerived().Derived::loadAsCopy(IGF, src, temp);
-    asDerived().Derived::assign(IGF, temp, dest);
+    asDerived().Derived::assign(IGF, temp, dest, isOutlined);
   }
 
-  void assignWithTake(IRGenFunction &IGF, Address dest, Address src,
-                      SILType T) const override {
+  void assignWithTake(IRGenFunction &IGF, Address dest, Address src, SILType T,
+                      bool isOutlined) const override {
     Explosion temp;
     asDerived().Derived::loadAsTake(IGF, src, temp);
-    asDerived().Derived::assign(IGF, temp, dest);
+    asDerived().Derived::assign(IGF, temp, dest, isOutlined);
   }
 
   void reexplode(IRGenFunction &IGF, Explosion &in,
@@ -117,8 +117,8 @@ public:
     schema.add(ExplosionSchema::Element::forScalar(ty));
   }
 
-  void initialize(IRGenFunction &IGF, Explosion &src,
-                  Address addr) const override {
+  void initialize(IRGenFunction &IGF, Explosion &src, Address addr,
+                  bool isOutlined) const override {
     addr = asDerived().projectScalar(IGF, addr);
     IGF.Builder.CreateStore(src.claimNext(), addr);
   }
@@ -127,7 +127,7 @@ public:
                   Explosion &out) const override {
     addr = asDerived().projectScalar(IGF, addr);
     llvm::Value *value = IGF.Builder.CreateLoad(addr);
-    asDerived().emitScalarRetain(IGF, value, Atomicity::Atomic);
+    asDerived().emitScalarRetain(IGF, value, IGF.getDefaultAtomicity());
     out.add(value);
   }
 
@@ -137,7 +137,8 @@ public:
     out.add(IGF.Builder.CreateLoad(addr));
   }
 
-  void assign(IRGenFunction &IGF, Explosion &src, Address dest) const override {
+  void assign(IRGenFunction &IGF, Explosion &src, Address dest,
+              bool isOutlined) const override {
     // Project down.
     dest = asDerived().projectScalar(IGF, dest);
 
@@ -153,7 +154,7 @@ public:
 
     // Release the old value if we need to.
     if (!Derived::IsScalarPOD) {
-      asDerived().emitScalarRelease(IGF, oldValue, Atomicity::Atomic);
+      asDerived().emitScalarRelease(IGF, oldValue, IGF.getDefaultAtomicity());
     }
   }
 
@@ -175,11 +176,12 @@ public:
     asDerived().emitScalarFixLifetime(IGF, value);
   }
 
-  void destroy(IRGenFunction &IGF, Address addr, SILType T) const override {
+  void destroy(IRGenFunction &IGF, Address addr, SILType T,
+               bool isOutlined) const override {
     if (!Derived::IsScalarPOD) {
       addr = asDerived().projectScalar(IGF, addr);
       llvm::Value *value = IGF.Builder.CreateLoad(addr, "toDestroy");
-      asDerived().emitScalarRelease(IGF, value, Atomicity::Atomic);
+      asDerived().emitScalarRelease(IGF, value, IGF.getDefaultAtomicity());
     }
   }
   
@@ -199,10 +201,36 @@ public:
 
   void addToAggLowering(IRGenModule &IGM, SwiftAggLowering &lowering,
                         Size offset) const override {
-    LoadableTypeInfo::addScalarToAggLowering(IGM, lowering,
-                                             asDerived().getScalarType(),
-                                             offset,
-                                           asDerived().Derived::getFixedSize());
+    // Can't use getFixedSize because it returns the alloc size not the store
+    // size.
+    LoadableTypeInfo::addScalarToAggLowering(
+        IGM, lowering, asDerived().getScalarType(), offset,
+        Size(IGM.DataLayout.getTypeStoreSize(asDerived().getScalarType())));
+  }
+
+};
+
+/// SingleScalarTypeInfoWithTypeLayout - A further specialization of
+/// SingleScalarTypeInfo for types which knows how-to construct a type layout
+/// from its derived type which must be a TypeInfo.
+template <class Derived, class Base>
+class SingleScalarTypeInfoWithTypeLayout
+    : public SingleScalarTypeInfo<Derived, Base> {
+protected:
+  template <class... T>
+  SingleScalarTypeInfoWithTypeLayout(T &&... args)
+      : SingleScalarTypeInfo<Derived, Base>(::std::forward<T>(args)...) {}
+
+  const Derived &asDerived() const {
+    return static_cast<const Derived &>(*this);
+  }
+
+public:
+  friend class SingleScalarTypeInfo<Derived, Base>;
+
+  TypeLayoutEntry *buildTypeLayoutEntry(IRGenModule &IGM,
+                                        SILType T) const override {
+    return IGM.typeLayoutCache.getOrCreateScalarEntry(asDerived(), T);
   }
 };
 
@@ -220,6 +248,10 @@ protected:
                                           IsPOD, IsFixedSize,
                                           ::std::forward<T>(args)...) {}
 
+  const Derived &asDerived() const {
+    return static_cast<const Derived &>(*this);
+  }
+
 private:
   friend class SingleScalarTypeInfo<Derived, Base>;
   static const bool IsScalarPOD = true;
@@ -232,6 +264,12 @@ private:
 
   void emitScalarFixLifetime(IRGenFunction &IGF, llvm::Value *value) const {
   }
+
+  TypeLayoutEntry *buildTypeLayoutEntry(IRGenModule &IGM,
+                                        SILType T) const override {
+    return IGM.typeLayoutCache.getOrCreateScalarEntry(asDerived(), T);
+  }
+
 };
 
 }

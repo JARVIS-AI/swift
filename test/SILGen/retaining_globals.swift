@@ -1,4 +1,5 @@
-// RUN: %target-swift-frontend(mock-sdk: %clang-importer-sdk) -import-objc-header %S/Inputs/globals.h -emit-silgen %s | %FileCheck %s
+
+// RUN: %target-swift-emit-silgen(mock-sdk: %clang-importer-sdk) -module-name retaining_globals -import-objc-header %S/Inputs/globals.h %s | %FileCheck %s
 // REQUIRES: objc_interop
 
 
@@ -25,22 +26,22 @@ func main() {
 
 
   // CHECK: [[globalString:%.*]] = load [copy] {{%.*}} : $*NSString
-  // CHECK: [[bridgeStringFunc:%.*]] = function_ref @{{.*}} : $@convention(method) (@owned Optional<NSString>, @thin String.Type) -> @owned String
-  // CHECK: [[wrappedString:%.*]] = enum $Optional<NSString>, #Optional.some!enumelt.1, [[globalString]] : $NSString
+  // CHECK: [[bridgeStringFunc:%.*]] = function_ref @{{.*}} : $@convention(method) (@guaranteed Optional<NSString>, @thin String.Type) -> @owned String
+  // CHECK: [[wrappedString:%.*]] = enum $Optional<NSString>, #Optional.some!enumelt, [[globalString]] : $NSString
   // CHECK: [[stringMetaType:%.*]] = metatype $@thin String.Type
-  // CHECK: [[bridgedString:%.*]] = apply [[bridgeStringFunc]]([[wrappedString]], [[stringMetaType]]) : $@convention(method) (@owned Optional<NSString>, @thin String.Type) -> @owned String
+  // CHECK: [[bridgedString:%.*]] = apply [[bridgeStringFunc]]([[wrappedString]], [[stringMetaType]]) : $@convention(method) (@guaranteed Optional<NSString>, @thin String.Type) -> @owned String
   let string = globalString // Problematic case, wasn't being retained
 
-  // CHECK: load [copy] {{%.*}} : $*Optional<NSObject>
+  // CHECK: [[load_1:%.*]] = load [copy] {{%.*}} : $*Optional<NSObject>
   let object = globalObject
   
-  // CHECK: load [copy] {{%.*}} : $*Optional<AnyObject>
+  // CHECK: [[load_2:%.*]] = load [copy] {{%.*}} : $*Optional<AnyObject>
   let id = globalId
   
-  // CHECK: load [copy] {{%.*}} : $*Optional<NSArray>
+  // CHECK: [[load_3:%.*]] = load [copy] {{%.*}} : $*Optional<NSArray>
   let arr = globalArray
   
-  // CHECK: load [copy] {{%.*}} : $*Optional<NSArray>
+  // CHECK: [[load_4:%.*]] = load [copy] {{%.*}} : $*Optional<NSArray>
   let constArr = globalConstArray
 
   // Make sure there's no more copies
@@ -52,14 +53,17 @@ func main() {
   print(arr as Any)
   print(constArr as Any)
 
-  // CHECK: destroy_value
-  // CHECK: destroy_value
-  // CHECK: destroy_value
-  // CHECK: destroy_value
-  // CHECK: destroy_value
+  // CHECK: [[PRINT_FUN:%.*]] = function_ref @$ss5print_9separator10terminatoryypd_S2StF : $@convention(thin) (@guaranteed Array<Any>, @guaranteed String, @guaranteed String) -> ()
+  // CHECK: apply [[PRINT_FUN]]({{.*}})
+  // CHECK: destroy_value [[load_4]]
+  // CHECK: destroy_value [[load_3]]
+  // CHECK: destroy_value [[load_2]]
+  // CHECK: destroy_value [[load_1]]
+  // CHECK: destroy_value [[bridgedString]]
 
   // Make sure there's no more destroys
   // CHECK-NOT: destroy_value
+  // CHECK: } // end sil function '$s17retaining_globals4mainyyF'
 }
 
 

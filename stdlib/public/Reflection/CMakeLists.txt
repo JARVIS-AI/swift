@@ -1,11 +1,14 @@
-add_swift_library(swiftReflection STATIC TARGET_LIBRARY FORCE_BUILD_FOR_HOST_SDK
-  Demangle.cpp
+set(swiftReflection_SOURCES
   MetadataSource.cpp
-  Remangle.cpp
   TypeLowering.cpp
   TypeRef.cpp
-  TypeRefBuilder.cpp
+  TypeRefBuilder.cpp)
 
-  C_COMPILE_FLAGS ${SWIFT_RUNTIME_CXX_FLAGS}
+add_swift_target_library(swiftReflection STATIC
+  ${swiftReflection_SOURCES}
+  C_COMPILE_FLAGS ${SWIFT_RUNTIME_CXX_FLAGS} -DswiftCore_EXPORTS
   LINK_FLAGS ${SWIFT_RUNTIME_LINK_FLAGS}
+  INCORPORATE_OBJECT_LIBRARIES
+    swiftLLVMSupport swiftDemangling
+  SWIFT_COMPILE_FLAGS ${SWIFT_STANDARD_LIBRARY_SWIFT_FLAGS}
   INSTALL_IN_COMPONENT dev)

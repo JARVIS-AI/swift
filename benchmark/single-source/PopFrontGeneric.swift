@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -12,25 +12,28 @@
 
 import TestsUtils
 
-let reps = 1
+public let PopFrontArrayGeneric = BenchmarkInfo(
+  name: "PopFrontArrayGeneric",
+  runFunction: run_PopFrontArrayGeneric,
+  tags: [.validation, .api, .Array],
+  legacyFactor: 20)
+
 let arrayCount = 1024
 
 // This test case exposes rdar://17440222 which caused rdar://17974483 (popFront
 // being really slow).
 protocol MyArrayBufferProtocol : MutableCollection, RandomAccessCollection {
-  associatedtype Element
-
   mutating func myReplace<C>(
     _ subRange: Range<Int>,
     with newValues: C
-  ) where C : Collection, C.Iterator.Element == Element
+  ) where C : Collection, C.Element == Element
 }
 
 extension Array : MyArrayBufferProtocol {
   mutating func myReplace<C>(
     _ subRange: Range<Int>,
     with newValues: C
-  ) where C : Collection, C.Iterator.Element == Element {
+  ) where C : Collection, C.Element == Element {
     replaceSubrange(subRange, with: newValues)
   }
 }
@@ -39,7 +42,7 @@ func myArrayReplace<
   B: MyArrayBufferProtocol,
   C: Collection
 >(_ target: inout B, _ subRange: Range<Int>, _ newValues: C)
-  where C.Iterator.Element == B.Element, B.Index == Int {
+  where C.Element == B.Element, B.Index == Int {
   target.myReplace(subRange, with: newValues)
 }
 
@@ -47,15 +50,13 @@ func myArrayReplace<
 public func run_PopFrontArrayGeneric(_ N: Int) {
   let orig = Array(repeating: 1, count: arrayCount)
   var a = [Int]()
-  for _ in 1...20*N {
-    for _ in 1...reps {
+  for _ in 1...N {
       var result = 0
       a.append(contentsOf: orig)
       while a.count != 0 {
         result += a[0]
         myArrayReplace(&a, 0..<1, EmptyCollection())
       }
-      CheckResults(result == arrayCount, "IncorrectResults in StringInterpolation: \(result) != \(arrayCount)")
-    }
+      CheckResults(result == arrayCount)
   }
 }

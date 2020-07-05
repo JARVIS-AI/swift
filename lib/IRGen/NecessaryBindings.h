@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -27,6 +27,7 @@
 
 namespace swift {
   class CanType;
+  enum class MetadataState : size_t;
   class ProtocolDecl;
   class ProtocolConformanceRef;
 
@@ -41,6 +42,13 @@ namespace irgen {
 class NecessaryBindings {
   llvm::SetVector<GenericRequirement> Requirements;
 
+
+  /// Are the bindings to be computed for a partial apply forwarder.
+  /// In the case this is true we need to store/restore the conformance of a
+  /// specialized type with conditional conformance because the conditional
+  /// requirements are not available in the partial apply forwarder.
+  bool forPartialApply = false;
+
 public:
   NecessaryBindings() = default;
   
@@ -48,9 +56,12 @@ public:
   /// signature.
   static NecessaryBindings forFunctionInvocations(IRGenModule &IGM,
                                                   CanSILFunctionType origType,
-                                                  CanSILFunctionType substType,
-                                                  ArrayRef<Substitution> subs);
-  
+                                                  SubstitutionMap subs);
+  static NecessaryBindings forPartialApplyForwarder(IRGenModule &IGM,
+                                                    CanSILFunctionType origType,
+                                                    SubstitutionMap subs,
+                                                    bool considerParameterSources = true);
+
   /// Add whatever information is necessary to reconstruct type metadata
   /// for the given type.
   void addTypeMetadata(CanType type);
@@ -79,11 +90,17 @@ public:
   void save(IRGenFunction &IGF, Address buffer) const;
 
   /// Restore the necessary bindings from the given buffer.
-  void restore(IRGenFunction &IGF, Address buffer) const;
+  void restore(IRGenFunction &IGF, Address buffer, MetadataState state) const;
 
   const llvm::SetVector<GenericRequirement> &getRequirements() const {
     return Requirements;
   }
+private:
+  static NecessaryBindings computeBindings(IRGenModule &IGM,
+                                           CanSILFunctionType origType,
+                                           SubstitutionMap subs,
+                                           bool forPartialApplyForwarder,
+                                           bool considerParameterSources = true);
 };
 
 } // end namespace irgen

@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -10,12 +10,13 @@
 //
 //===----------------------------------------------------------------------===//
 
+@inlinable
 internal func _writeBackMutableSlice<C, Slice_>(
   _ self_: inout C, bounds: Range<C.Index>, slice: Slice_
 ) where
-  C : MutableCollection,
-  Slice_ : Collection,
-  C._Element == Slice_.Iterator.Element,
+  C: MutableCollection,
+  Slice_: Collection,
+  C.Element == Slice_.Element,
   C.Index == Slice_.Index {
 
   self_._failEarlyRangeCheck(bounds, bounds: self_.startIndex..<self_.endIndex)

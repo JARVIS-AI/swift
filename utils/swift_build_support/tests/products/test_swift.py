@@ -2,7 +2,7 @@
 #
 # This source file is part of the Swift.org open source project
 #
-# Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+# Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 # Licensed under Apache License v2.0 with Runtime Library Exception
 #
 # See https://swift.org/LICENSE.txt for license information
@@ -55,7 +55,10 @@ class SwiftTestCase(unittest.TestCase):
             benchmark=False,
             benchmark_num_onone_iterations=3,
             benchmark_num_o_iterations=3,
-            enable_sil_ownership=False)
+            disable_guaranteed_normal_arguments=True,
+            force_optimized_typechecker=False,
+            enable_stdlibcore_exclusivity_checking=False,
+            enable_experimental_differentiable_programming=False)
 
         # Setup shell
         shell.dry_run = True
@@ -82,8 +85,13 @@ class SwiftTestCase(unittest.TestCase):
             toolchain=self.toolchain,
             source_dir='/path/to/src',
             build_dir='/path/to/build')
-        self.assertEqual(swift.cmake_options, [
-                         '-DCMAKE_EXPORT_COMPILE_COMMANDS=TRUE'])
+        expected = [
+            '-DCMAKE_EXPORT_COMPILE_COMMANDS=TRUE',
+            '-DSWIFT_FORCE_OPTIMIZED_TYPECHECKER:BOOL=FALSE',
+            '-DSWIFT_STDLIB_ENABLE_STDLIBCORE_EXCLUSIVITY_CHECKING:BOOL=FALSE',
+            '-DSWIFT_ENABLE_EXPERIMENTAL_DIFFERENTIABLE_PROGRAMMING:BOOL=FALSE'
+        ]
+        self.assertEqual(set(swift.cmake_options), set(expected))
 
     def test_swift_runtime_tsan(self):
         self.args.enable_tsan_runtime = True
@@ -92,9 +100,14 @@ class SwiftTestCase(unittest.TestCase):
             toolchain=self.toolchain,
             source_dir='/path/to/src',
             build_dir='/path/to/build')
-        self.assertEqual(swift.cmake_options,
-                         ['-DSWIFT_RUNTIME_USE_SANITIZERS=Thread',
-                          '-DCMAKE_EXPORT_COMPILE_COMMANDS=TRUE'])
+        flags_set = [
+            '-DSWIFT_RUNTIME_USE_SANITIZERS=Thread',
+            '-DCMAKE_EXPORT_COMPILE_COMMANDS=TRUE',
+            '-DSWIFT_FORCE_OPTIMIZED_TYPECHECKER:BOOL=FALSE',
+            '-DSWIFT_STDLIB_ENABLE_STDLIBCORE_EXCLUSIVITY_CHECKING:BOOL=FALSE',
+            '-DSWIFT_ENABLE_EXPERIMENTAL_DIFFERENTIABLE_PROGRAMMING:BOOL=FALSE'
+        ]
+        self.assertEqual(set(swift.cmake_options), set(flags_set))
 
     def test_swift_compiler_vendor_flags(self):
         self.args.compiler_vendor = "none"
@@ -268,14 +281,40 @@ class SwiftTestCase(unittest.TestCase):
              '-DSWIFT_BENCHMARK_NUM_O_ITERATIONS=25'],
             [x for x in swift.cmake_options if 'SWIFT_BENCHMARK_NUM' in x])
 
-    def test_sil_ownership_flags(self):
-        self.args.enable_sil_ownership = True
+    def test_force_optimized_typechecker_flags(self):
+        self.args.force_optimized_typechecker = True
         swift = Swift(
             args=self.args,
             toolchain=self.toolchain,
             source_dir='/path/to/src',
             build_dir='/path/to/build')
         self.assertEqual(
-            ['-DSWIFT_STDLIB_ENABLE_SIL_OWNERSHIP=TRUE'],
+            ['-DSWIFT_FORCE_OPTIMIZED_TYPECHECKER:BOOL=TRUE'],
             [x for x in swift.cmake_options
-             if 'SWIFT_STDLIB_ENABLE_SIL_OWNERSHIP' in x])
+             if 'SWIFT_FORCE_OPTIMIZED_TYPECHECKER' in x])
+
+    def test_exclusivity_checking_flags(self):
+        self.args.enable_stdlibcore_exclusivity_checking = True
+        swift = Swift(
+            args=self.args,
+            toolchain=self.toolchain,
+            source_dir='/path/to/src',
+            build_dir='/path/to/build')
+        self.assertEqual(
+            ['-DSWIFT_STDLIB_ENABLE_STDLIBCORE_EXCLUSIVITY_CHECKING:BOOL='
+             'TRUE'],
+            [x for x in swift.cmake_options
+             if 'SWIFT_STDLIB_ENABLE_STDLIBCORE_EXCLUSIVITY_CHECKING' in x])
+
+    def test_experimental_differentiable_programming_flags(self):
+        self.args.enable_experimental_differentiable_programming = True
+        swift = Swift(
+            args=self.args,
+            toolchain=self.toolchain,
+            source_dir='/path/to/src',
+            build_dir='/path/to/build')
+        self.assertEqual(
+            ['-DSWIFT_ENABLE_EXPERIMENTAL_DIFFERENTIABLE_PROGRAMMING:BOOL='
+             'TRUE'],
+            [x for x in swift.cmake_options
+             if 'DSWIFT_ENABLE_EXPERIMENTAL_DIFFERENTIABLE_PROGRAMMING' in x])

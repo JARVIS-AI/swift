@@ -1,4 +1,4 @@
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -6,8 +6,7 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// RUN: rm -rf %t
-// RUN: mkdir -p %t
+// RUN: %empty-directory(%t)
 //
 // RUN: %target-clang %S/Inputs/FoundationBridge/FoundationBridge.m -c -o %t/FoundationBridgeObjC.o -g
 // RUN: %target-build-swift %s -I %S/Inputs/FoundationBridge/ -Xlinker %t/FoundationBridgeObjC.o -o %t/TestCalendar
@@ -15,6 +14,11 @@
 // RUN: %target-run %t/TestCalendar > %t.txt
 // REQUIRES: executable_test
 // REQUIRES: objc_interop
+
+// FIXME: rdar://problem/31207060
+// UNSUPPORTED: OS=ios
+// UNSUPPORTED: OS=tvos
+// UNSUPPORTED: OS=watchos
 
 import Foundation
 import FoundationBridgeObjC
@@ -105,8 +109,27 @@ class TestCalendar : TestCalendarSuper {
         
         current2.locale = Locale(identifier: "MyMadeUpLocale")
         expectNotEqual(current, current2)
+  }
+
+    func test_hash() {
+        let calendars: [Calendar] = [
+            Calendar.autoupdatingCurrent,
+            Calendar(identifier: .buddhist),
+            Calendar(identifier: .gregorian),
+            Calendar(identifier: .islamic),
+            Calendar(identifier: .iso8601),
+        ]
+        checkHashable(calendars, equalityOracle: { $0 == $1 })
+
+        // autoupdating calendar isn't equal to the current, even though it's
+        // likely to be the same.
+        let calendars2: [Calendar] = [
+            Calendar.autoupdatingCurrent,
+            Calendar.current,
+        ]
+        checkHashable(calendars2, equalityOracle: { $0 == $1 })
     }
-    
+
     func test_properties() {
         // Mainly we want to just make sure these go through to the NSCalendar implementation at this point.
         if #available(iOS 8.0, OSX 10.7, *) {
@@ -178,7 +201,10 @@ class TestCalendar : TestCalendarSuper {
             
             expectEqual(Date(timeIntervalSince1970: 1468652400.0), c.startOfDay(for: d))
             
-            expectEqual(.orderedSame, c.compare(d, to: d + 10, toGranularity: .minute))
+            if #available(iOS 8, macOS 10.10, *) {
+              // Mac OS X 10.9 and iOS 7 had a bug in NSCalendar for hour, minute, and second granularities.
+              expectEqual(.orderedSame, c.compare(d, to: d + 10, toGranularity: .minute))
+            }
             
             expectFalse(c.isDate(d, equalTo: d + 10, toGranularity: .second))
             expectTrue(c.isDate(d, equalTo: d + 10, toGranularity: .day))
@@ -292,6 +318,7 @@ var CalendarTests = TestSuite("TestCalendar")
 CalendarTests.test("test_copyOnWrite") { TestCalendar().test_copyOnWrite() }
 CalendarTests.test("test_bridgingAutoupdating") { TestCalendar().test_bridgingAutoupdating() }
 CalendarTests.test("test_equality") { TestCalendar().test_equality() }
+CalendarTests.test("test_hash") { TestCalendar().test_hash() }
 CalendarTests.test("test_properties") { TestCalendar().test_properties() }
 CalendarTests.test("test_AnyHashableContainingCalendar") { TestCalendar().test_AnyHashableContainingCalendar() }
 CalendarTests.test("test_AnyHashableCreatedFromNSCalendar") { TestCalendar().test_AnyHashableCreatedFromNSCalendar() }

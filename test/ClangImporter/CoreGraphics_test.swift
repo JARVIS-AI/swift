@@ -1,13 +1,14 @@
-// RUN: %target-swift-frontend -target x86_64-apple-macosx10.11 -emit-ir -O %s | %FileCheck %s
+// RUN: %target-swift-frontend -module-name=cgtest -emit-ir -O %s | %FileCheck %s
 
 // Test some imported CG APIs
 import CoreGraphics
 
 // REQUIRES: OS=macosx
+// REQUIRES: CPU=x86_64
 
 // CHECK: [[SWITCHTABLE:@.*]] = private unnamed_addr constant [8 x i64] [i64 0, i64 12, i64 23, i64 34, i64 45, i64 55, i64 67, i64 71]
 
-// CHECK-LABEL: define i64 {{.*}}testEnums{{.*}} {
+// CHECK-LABEL: define swiftcc i64 {{.*}}testEnums{{.*}} {
 public func testEnums(_ model: CGColorSpaceModel) -> Int {
   switch model {
      case .unknown : return 0
@@ -19,14 +20,14 @@ public func testEnums(_ model: CGColorSpaceModel) -> Int {
      case .indexed : return 67
      case .pattern : return 71
 
-     default: return 0
+     default: return -1
   }
 // CHECK:   [[GEP:%.+]] = getelementptr inbounds [8 x i64], [8 x i64]* [[SWITCHTABLE]], i64 0, i64 %{{.*}}
 // CHECK:   [[LOAD:%.+]] = load i64, i64* [[GEP]], align 8
 // CHECK:   ret i64 [[LOAD]]
 }
 
-// CHECK-LABEL: define void {{.*}}rotationAround{{.*}} {
+// CHECK-LABEL: define swiftcc void {{.*}}rotationAround{{.*}} {
 // Get a transform that will rotate around a given offset
 public func rotationAround(offset: CGPoint, angle: CGFloat,
         transform: CGAffineTransform = .identity) -> CGAffineTransform {
@@ -42,7 +43,7 @@ public func rotationAround(offset: CGPoint, angle: CGFloat,
 // CHECK:   ret void
 }
 
-// CHECK-LABEL: define void {{.*}}trace{{.*}} {
+// CHECK-LABEL: define swiftcc void {{.*}}trace{{.*}} {
 public func trace(in context: CGContext, path: CGPath) {
   let red = CGColor(red: 1, green: 0, blue: 0, alpha: 1)
   context.saveGState()
@@ -60,7 +61,7 @@ public func trace(in context: CGContext, path: CGPath) {
 // CHECK:   ret void
 }
 
-// CHECK-LABEL: define void {{.*}}pdfOperations{{.*}} {
+// CHECK-LABEL: define swiftcc void {{.*}}pdfOperations{{.*}} {
 public func pdfOperations(_ context: CGContext) {
 	context.beginPDFPage(nil)
 	context.endPDFPage()
@@ -74,11 +75,12 @@ public func pdfOperations(_ context: CGContext) {
 
 // Test some more recently renamed APIs
 
-// CHECK-LABEL: define void {{.*}}testColorRenames{{.*}} {
+// CHECK-LABEL: define swiftcc void {{.*}}testColorRenames{{.*}} {
+@available(macOS 10.11, *)
 public func testColorRenames(color: CGColor,
                              intent: CGColorRenderingIntent) {
   let colorSpace = CGColorSpace(name: CGColorSpace.sRGB)!
-// CHECK:   %{{.*}} = load {{.*}}%struct.__CFString** @kCGColorSpaceSRGB {{.*}}, align 8
+// CHECK:   %{{.*}} = load {{.*}}%struct.__CFString** @kCGColorSpaceSRGB{{.*}}, align 8
 // CHECK:   %{{.*}} = {{.*}} call %struct.CGColorSpace* @CGColorSpaceCreateWithName(%struct.__CFString* %{{.*}})
 
   let _ = color.converted(to: colorSpace, intent: intent, options: nil)
@@ -87,7 +89,7 @@ public func testColorRenames(color: CGColor,
 // CHECK:   ret void
 }
 
-// CHECK-LABEL: define void {{.*}}testRenames{{.*}} {
+// CHECK-LABEL: define swiftcc void {{.*}}testRenames{{.*}} {
 public func testRenames(transform: CGAffineTransform, context: CGContext,
                         point: CGPoint, size: CGSize, rect: CGRect,
                         image: CGImage,
@@ -99,9 +101,9 @@ public func testRenames(transform: CGAffineTransform, context: CGContext,
   let _ = point.applying(transform)
   var rect = rect.applying(transform)
   let _ = size.applying(transform)
-// CHECK:   %{{.*}} = call { double, double } @CGPointApplyAffineTransform(double %{{.*}}, double %{{.*}}, %struct.CGAffineTransform* {{.*}})
+// CHECK:   %{{.*}} = {{(tail )?}}call { double, double } @CGPointApplyAffineTransform(double %{{.*}}, double %{{.*}}, %struct.CGAffineTransform* {{.*}})
 // CHECK:   call void @CGRectApplyAffineTransform(%struct.CGRect* {{.*}}, %struct.CGRect* {{.*}}, %struct.CGAffineTransform* {{.*}})
-// CHECK:   %{{.*}} = call { double, double } @CGSizeApplyAffineTransform(double %{{.*}}, double %{{.*}}, %struct.CGAffineTransform* {{.*}})
+// CHECK:   %{{.*}} = {{(tail )?}}call { double, double } @CGSizeApplyAffineTransform(double %{{.*}}, double %{{.*}}, %struct.CGAffineTransform* {{.*}})
 
   context.concatenate(transform)
   context.rotate(by: CGFloat.pi)
@@ -114,8 +116,8 @@ public func testRenames(transform: CGAffineTransform, context: CGContext,
 
   context.clip(to: rect)
   context.clip(to: rect, mask: image)
-// CHECK:   call void @CGContextClipToRect(%struct.CGContext* [[CONTEXT]], %struct.CGRect* byval nonnull align 8 %{{.*}})
-// CHECK:   call void @CGContextClipToMask(%struct.CGContext* [[CONTEXT]], %struct.CGRect* byval nonnull align 8 %{{.*}}, %struct.CGImage* %{{.*}})
+// CHECK:   call void @CGContextClipToRect(%struct.CGContext* [[CONTEXT]], %struct.CGRect* nonnull byval align 8 %{{.*}})
+// CHECK:   call void @CGContextClipToMask(%struct.CGContext* [[CONTEXT]], %struct.CGRect* nonnull byval align 8 %{{.*}}, %struct.CGImage* %{{.*}})
 
   var slice = CGRect.zero
   var remainder = CGRect.zero
@@ -123,7 +125,7 @@ public func testRenames(transform: CGAffineTransform, context: CGContext,
           from: edge)
   assert((slice, remainder) == rect.divided(atDistance: CGFloat(2.0),
                                             from: edge))
-// CHECK:   call void @CGRectDivide(%struct.CGRect* byval nonnull align 8 %{{.*}}, %struct.CGRect* nonnull %{{.*}}, %struct.CGRect* nonnull %{{.*}}, double {{2\.0+.*}}, i32 %{{.*}})
+// CHECK:   call void @CGRectDivide(%struct.CGRect* nonnull byval align 8 %{{.*}}, %struct.CGRect* nonnull %{{.*}}, %struct.CGRect* nonnull %{{.*}}, double {{2\.0+.*}}, i32 %{{.*}})
 //
 // CHECK:   ret void
 }

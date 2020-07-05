@@ -1,6 +1,8 @@
-add_swift_library(swiftIndex STATIC
+add_swift_host_library(swiftIndex STATIC
   Index.cpp
   IndexDataConsumer.cpp
-  IndexSymbol.cpp
-  LINK_LIBRARIES
-    swiftAST)
+  IndexRecord.cpp
+  IndexSymbol.cpp)
+target_link_libraries(swiftIndex PRIVATE
+  swiftAST
+  swiftIDE)

@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -15,101 +15,75 @@
 
 #include "swift/Basic/LLVM.h"
 #include "clang/Index/IndexSymbol.h"
-#include "llvm/ADT/SmallString.h"
 
 namespace swift {
 class Decl;
 class ValueDecl;
+class ModuleEntity;
+enum class AccessorKind;
 
 namespace index {
 
-enum class SymbolKind {
-  Unknown,
+using clang::index::SymbolKind;
+using clang::index::SymbolLanguage;
+using clang::index::SymbolSubKind;
+using clang::index::SymbolProperty;
+using clang::index::SymbolPropertySet;
+using clang::index::SymbolRole;
+using clang::index::SymbolRoleSet;
+using clang::index::SymbolRelation;
+using clang::index::SymbolInfo;
 
-  Module,
-  ClangModule, // FIXME: collapse into Module and use a separate Language field.
-
-  Enum,
-  Struct,
-  Class,
-  Protocol,
-  Extension,
-
-  TypeAlias,
-  AssociatedType,
-  GenericTypeParam,
-
-  Function,
-  Variable,
-  PrefixOperator,
-  PostfixOperator,
-  InfixOperator,
-  Accessor,
-  Subscript,
-  EnumElement,
-
-  InstanceMethod,
-  ClassMethod,
-  StaticMethod,
-  InstanceProperty,
-  ClassProperty,
-  StaticProperty,
-
-  Constructor,
-  Destructor,
-};
-
-enum class SymbolSubKind : uint32_t {
-  None                          = 0,
-
-  AccessorGetter                = 1 << 0,
-  AccessorSetter                = 1 << 1,
-  AccessorWillSet               = 1 << 2,
-  AccessorDidSet                = 1 << 3,
-  AccessorAddressor             = 1 << 4,
-  AccessorMutableAddressor      = 1 << 5,
-
-  ExtensionOfStruct             = 1 << 6,
-  ExtensionOfClass              = 1 << 7,
-  ExtensionOfEnum               = 1 << 8,
-  ExtensionOfProtocol           = 1 << 9,
-
-  UnitTest                      = 1 << 10,
-};
-
-typedef uint32_t SymbolSubKindSet;
-
-inline SymbolSubKindSet operator&(SymbolSubKindSet SKSet, SymbolSubKind SK) {
-  return SKSet & (SymbolSubKindSet)SK;
+inline SymbolPropertySet operator&(SymbolPropertySet SKSet, SymbolProperty SK) {
+  return SKSet & (SymbolPropertySet)SK;
 }
-inline SymbolSubKindSet operator|(SymbolSubKindSet SKSet, SymbolSubKind SK) {
-  return SKSet | (SymbolSubKindSet)SK;
+inline SymbolPropertySet operator|(SymbolPropertySet SKSet, SymbolProperty SK) {
+  return SKSet | (SymbolPropertySet)SK;
 }
-inline SymbolSubKindSet &operator|=(SymbolSubKindSet &SKSet, SymbolSubKind SK) {
+inline SymbolPropertySet &operator|=(SymbolPropertySet &SKSet, SymbolProperty SK) {
   return SKSet = SKSet | SK;
 }
 
-using SymbolRole = clang::index::SymbolRole;
-using SymbolRoleSet = clang::index::SymbolRoleSet;
-
-struct IndexSymbol {
-  const ValueDecl *decl;
-  SymbolKind kind;
-  SymbolSubKindSet subKinds = SymbolSubKindSet(0);
+struct IndexRelation {
+  const Decl *decl;
+  SymbolInfo symInfo;
   SymbolRoleSet roles = SymbolRoleSet(0);
+
   // The following strings are guaranteed to live at least as long as the
   // current indexing action.
   StringRef name;
   StringRef USR; // USR may be safely compared by pointer.
   StringRef group;
-  StringRef receiverUSR;
-  unsigned line = 0;
-  unsigned column = 0;
 
-  IndexSymbol() = default;
+  IndexRelation(SymbolRoleSet Roles, const Decl *Sym, SymbolInfo SymInfo, StringRef Name, StringRef USR)
+  : decl(Sym), symInfo(SymInfo), roles(Roles), name(Name), USR(USR) {}
+
+  IndexRelation() = default;
 };
 
-SymbolKind getSymbolKindForDecl(const Decl *D);
+struct IndexSymbol : IndexRelation {
+  SmallVector<IndexRelation, 3> Relations;
+  unsigned line = 0;
+  unsigned column = 0;
+  Optional<unsigned> offset;
+
+  IndexSymbol() = default;
+
+  StringRef getReceiverUSR() const {
+    for (auto Relation: Relations) {
+      if (Relation.roles & (SymbolRoleSet) SymbolRole::RelationReceivedBy)
+        return Relation.USR;
+    }
+    return StringRef();
+  }
+};
+
+SymbolInfo getSymbolInfoForModule(ModuleEntity Mod);
+SymbolInfo getSymbolInfoForDecl(const Decl *D);
+SymbolSubKind getSubKindForAccessor(AccessorKind AK);
+bool isLocalSymbol(const Decl *D);
+
+using clang::index::printSymbolProperties;
 
 } // end namespace index
 } // end namespace swift

@@ -720,7 +720,7 @@ type parameters.::
 
   struct S<T> {
     var x: T
-    @_specialize(Int, Float)
+    @_specialize(where T == Int, U == Float)
     mutating func exchangeSecond<U>(_ u: U, _ t: T) -> (U, T) {
       x = t
       return (u, x)
@@ -741,6 +741,40 @@ a similar attribute could be defined in the language, allowing it to be
 exposed as part of a function's API. That would allow direct dispatch
 to specialized code without type checks, even across modules.
 
+The exact syntax of the @_specialize function attribute is defined as: ::
+
+  @_specialize(exported: true, kind: full, where K == Int, V == Int)
+  @_specialize(exported: false, kind: partial, where K: _Trivial64)
+  func dictFunction<K, V>(dict: Dictionary<K, V>) {
+  }
+
+If 'exported' is set, the corresponding specialization would have a public
+visibility and can be used by clients. If 'exported' is omitted, it's value
+is assumed to be 'false'.
+
+If 'kind' is 'full' it means a full specialization and the compiler will
+produce an error if you forget to specify the type for some of the generic
+parameters in the 'where' clause. If 'kind' is 'partial' it means a partial
+specialization. If 'kind' is omitted, its value is assumed to be 'full.
+
+The requirements in the where clause may be same-type constraints like 'T == Int',
+but they may also specify so-called layout constraints like 'T: _Trivial'.
+
+The following layout constraints are currently supported:
+  * AnyObject - the actual parameter should be an instance of a class
+  * _NativeClass - the actual parameter should be an instance of a Swift native
+    class
+  * _RefCountedObject - the actual parameter should be a reference-counted object
+  * _NativeRefCountedObject - the actual parameter should be a Swift-native
+    reference-counted object
+  * _Trivial - the actual parameter should be of a trivial type, i.e. a type
+    without any reference counted properties.
+  * _Trivial(SizeInBits) - like _Trivial, but the size of the type should be
+    exactly 'SizeInBits' bits.
+  * _TrivialAtMost(SizeInBits) - like _Trivial, but the size of the type should
+    be at most 'SizeInBits' bits.
+
+
 Existential Types and Generics
 ------------------------------
 
@@ -749,7 +783,7 @@ protocols. A value of an existential type (say, Comparable) is a pair (value,
 vtable). 'value' stores the current value either directly (if it fits in the 3
 words allocated to the value) or as a pointer to the boxed representation (if
 the actual representation is larger than 3 words). By itself, this value cannot
-be interpreted, because it's type is not known statically, and may change due to
+be interpreted, because its type is not known statically, and may change due to
 assignment. The vtable provides the means to manipulate the value, because it
 provides a mapping between the protocols to which the existential type conforms
 (which is known statically) to the functions that implements that

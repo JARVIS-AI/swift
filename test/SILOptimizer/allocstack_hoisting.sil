@@ -1,5 +1,5 @@
-// RUN: %target-sil-opt -assume-parsing-unqualified-ownership-sil -enable-sil-verify-all %s -alloc-stack-hoisting | %FileCheck %s
-// RUN: %target-sil-opt -assume-parsing-unqualified-ownership-sil -enable-sil-verify-all %s -alloc-stack-hoisting -sil-merge-stack-slots=false | %FileCheck %s
+// RUN: %target-sil-opt -enable-sil-verify-all %s -alloc-stack-hoisting | %FileCheck %s
+// RUN: %target-sil-opt -enable-sil-verify-all %s -alloc-stack-hoisting -sil-merge-stack-slots=false | %FileCheck %s
 sil_stage canonical
 
 import Builtin
@@ -125,7 +125,7 @@ bb3:
 // CHECK-NOT: dealloc_stack
 // CHECK: bb2
 // CHECK: bb3:
-// CHECK  dealloc_stack [[FIXED]]
+// CHECK:  dealloc_stack [[FIXED]]
 // CHECK: dealloc_stack [[AS2]]
 // CHECK: dealloc_stack [[AS]]
 // CHECK:   return
@@ -165,7 +165,7 @@ sil @dont_hoist_opened_generic : $@convention(thin) (@in P, Builtin.Int1) -> () 
 bb0(%0 : $*P, %1: $Builtin.Int1):
   cond_br %1, bb1, bb2
 bb1:
-  %2 = open_existential_addr %0 : $*P to $*@opened("1B6851A6-4796-11E6-B7DF-B8E856428C60") P
+  %2 = open_existential_addr mutable_access %0 : $*P to $*@opened("1B6851A6-4796-11E6-B7DF-B8E856428C60") P
   %3 = alloc_stack $@opened("1B6851A6-4796-11E6-B7DF-B8E856428C60") P
 	copy_addr [take] %2 to [initialization] %3 : $*@opened("1B6851A6-4796-11E6-B7DF-B8E856428C60") P
   destroy_addr %3 : $*@opened("1B6851A6-4796-11E6-B7DF-B8E856428C60") P

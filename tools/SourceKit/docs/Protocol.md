@@ -23,10 +23,12 @@ The protocol is documented in the following format:
 | [Code Completion](#code-completion) | source.request.codecomplete |
 | [Cursor Info](#cursor-info) | source.request.cursorinfo |
 | [Demangling](#demangling) | source.request.demangle |
+| [Mangling](#simple-class-mangling) | source.request.mangle_simple_class |
 | [Documentation](#documentation) | source.request.docinfo |
 | [Module interface generation](#module-interface-generation) | source.request.editor.open.interface |
 | [Indexing](#indexing) | source.request.indexsource  |
 | [Protocol Version](#protocol-version) | source.request.protocol_version |
+| [Compiler Version](#compiler-version) | source.request.compiler_version |
 
 
 # Requests
@@ -416,6 +418,7 @@ of diagnostic entries. A diagnostic entry has this format:
     [opts] <key.fixits>:    (array) [fixit+] // one or more entries for fixits
     [opts] <key.ranges>:    (array) [range+] // one or more entries for ranges
     [opts] <key.diagnostics>: (array) [diagnostic+] // one or more sub-diagnostic entries
+    [opts] <key.educational_note_paths>: (array) [string+] // one or more absolute paths of educational notes, formatted as Markdown
 }
 ```
 
@@ -506,6 +509,77 @@ Welcome to SourceKit.  Type ':help' for assistance.
 }
 ```
 
+## Simple Class Mangling
+
+SourceKit is capable of "mangling" Swift class names. In other words,
+it's capable of taking the human-readable `UIKit.ViewController` as input and returning the symbol `_TtC5UIKit14ViewController`.
+
+### Request
+
+```
+{
+    <key.request>: (UID) <source.request.mangle_simple_class>,
+    <key.names>:   [mangle-request*] // An array of requests to mangle.
+}
+```
+
+```
+mangle-request ::=
+{
+    <key.modulename>: (string)  // The Swift module name
+    <key.name>: (string)        // The class name
+}
+```
+
+### Response
+
+```
+{
+    <key.results>: (array) [mangle-result+]   // The results for each
+                                              // mangling, in the order in
+                                              // which they were requested.
+}
+```
+
+```
+mangle-result ::=
+{
+    <key.name>: (string) // The mangled name.
+}
+```
+
+### Testing
+
+```
+$ sourcekitd-test -req=mangle [<names>]
+```
+
+For example, to mangle the name `UIKit.ViewController`:
+
+```
+$ sourcekitd-test -req=mangle UIKit.ViewController
+```
+
+Note that when using `sourcekitd-test`, the output is output in an ad hoc text
+format, not JSON.
+
+You could also issue the following request in the `sourcekitd-repl`, which
+produces JSON:
+
+```
+$ sourcekitd-repl
+Welcome to SourceKit.  Type ':help' for assistance.
+(SourceKit) {
+    key.request: source.request.mangle_simple_class,
+    key.names: [
+      {
+          key.modulename: "UIKit",
+          key.name: "ViewController"
+      }
+    ]
+}
+```
+
 ## Protocol Version
 
 SourceKit can provide information about the version of the protocol that is being used.
@@ -543,6 +617,45 @@ Welcome to SourceKit.  Type ':help' for assistance.
 }
 ```
 
+## Compiler Version
+
+SourceKit can provide information about the version of the compiler version that is being used.
+
+### Request
+
+```
+{
+    <key.request>: (UID) <source.request.compiler_version>
+}
+```
+
+### Response
+
+```
+{
+    <key.version_major>: (int64) // The major version number in a version string
+    <key.version_minor>: (int64) // The minor version number in a version string
+    <key.version_patch>: (int64) // The patch version number in a version string
+}
+```
+
+### Testing
+
+```
+$ sourcekitd-test -req=compiler-version
+```
+
+or
+
+```
+$ sourcekitd-repl
+Welcome to SourceKit.  Type ':help' for assistance.
+(SourceKit) {
+    key.request: source.request.compiler_version
+}
+```
+
+
 ## Cursor Info
 
 SourceKit is capable of providing information about a specific symbol at a specific cursor, or offset, position in a document.
@@ -563,6 +676,10 @@ To gather documentation, SourceKit must be given either the name of a module (ke
     [opt] <key.compilerargs>: [string*] // Array of zero or more strings for the compiler arguments,
                                         // e.g ["-sdk", "/path/to/sdk"]. If key.sourcefile is provided,
                                         // these must include the path to that file.
+    [opt] <key.cancel_on_subsequent_request>: (int64) // Whether this request should be canceled if a
+                                        // new cursor-info request is made that uses the same AST.
+                                        // This behavior is a workaround for not having first-class
+                                        // cancelation. For backwards compatibility, the default is 1.
 }
 ```
 
@@ -621,7 +738,48 @@ Welcome to SourceKit.  Type ':help' for assistance.
 }
 ```
 
+## Expression Type
+This request collects the types of all expressions in a source file after type checking.
+To fulfill this task, the client must provide the path to the Swift source file under
+type checking and the necessary compiler arguments to help resolve all dependencies.
 
+### Request
+
+```
+{
+    <key.request>:            (UID)     <source.request.expression.type>,
+    <key.sourcefile>:         (string)  // Absolute path to the file.
+    <key.compilerargs>:       [string*] // Array of zero or more strings for the compiler arguments,
+                                        // e.g ["-sdk", "/path/to/sdk"]. If key.sourcefile is provided,
+                                        // these must include the path to that file.
+    <key.expectedtypes>:      [string*] // A list of interested protocol USRs.
+                                        // When empty, we report all expressions in the file.
+                                        // When non-empty, we report expressions whose types conform to any of the give protocols.
+}
+```
+
+### Response
+```
+{
+    <key.expression_type_list>:       (array) [expr-type-info*]   // A list of expression and type
+}
+```
+
+```
+expr-type-info ::=
+{
+  <key.expression_offset>:    (int64)    // Offset of an expression in the source file
+  <key.expression_length>:    (int64)    // Length of an expression in the source file
+  <key.expression_type>:      (string)   // Printed type of this expression
+  <key.expectedtypes>:        [string*]  // A list of interested protocol USRs this expression conforms to
+}
+```
+
+### Testing
+
+```
+$ sourcekitd-test -req=collect-type /path/to/file.swift -- /path/to/file.swift
+```
 
 # UIDs
 

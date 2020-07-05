@@ -23,7 +23,7 @@ func testMap(_ array: [Int]) {
 // Nested single-expression closures -- <rdar://problem/20931915>
 class NestedSingleExpr {
   private var b: Bool = false
-  private func callClosure(_ callback: (Void) -> Void) {}
+  private func callClosure(_ callback: () -> Void) {}
 
   func call() {
     callClosure { [weak self] in
@@ -99,3 +99,8 @@ func haltAndCatchFire() -> Never { while true { } }
 let backupPlan: () -> Int = { haltAndCatchFire() }
 func missionCritical(storage: () -> String) {}
 missionCritical(storage: { haltAndCatchFire() })
+
+// <https://bugs.swift.org/browse/SR-4963>
+enum E { }
+func takesAnotherUninhabitedType(e: () -> E) {}
+takesAnotherUninhabitedType { haltAndCatchFire() }

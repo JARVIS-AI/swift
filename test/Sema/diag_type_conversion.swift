@@ -29,7 +29,9 @@ func foo6(a : A) {
 
 func foo7(b : [B]) {}
 func foo8(a : [A]) {
-  foo7(b : a) // expected-error {{cannot convert value of type '[A]' to expected argument type '[B]'}} {{13-13= as! [B]}}
+  // TODO(diagnostics): Since `A` and `B` are related it would make sense to suggest forced downcast.
+  foo7(b : a) // expected-error {{cannot convert value of type '[A]' to expected argument type '[B]'}}
+  // expected-note@-1 {{arguments to generic parameter 'Element' ('A' and 'B') are expected to be equal}}
 }
 
 protocol P1 {}
@@ -48,3 +50,25 @@ func foo13(a : [AnyHashable : Any]) {}
 func foo14(b : [NSObject : AnyObject]) {
   foo13(a : b)
 }
+
+
+// Add a minimal test for inout-to-pointer conversion involving a
+// generic function with a protocol constraint of Equatable.
+infix operator =*= : ComparisonPrecedence
+func =*= <T : Equatable>(lhs: T, rhs: T) -> Bool {
+ return lhs == rhs
+}
+func =*= <T : Equatable>(lhs: T?, rhs: T?) -> Bool {
+ return lhs == rhs
+}
+
+class C {}
+
+var o = C()
+var p: UnsafeMutablePointer<C>? = nil
+
+_ = p =*= &o
+
+
+func rdar25963182(_ bytes: [UInt8] = nil) {}
+// expected-error@-1 {{nil default argument value cannot be converted to type}}

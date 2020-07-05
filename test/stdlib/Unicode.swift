@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -55,6 +55,59 @@ UnicodeAPIs.test("UnicodeDecodingResult/Equatable") {
     .error
   ]
   checkEquatable(instances, oracle: ==)
+}
+
+typealias ASCII = Unicode.ASCII
+typealias UTF8 = Unicode.UTF8
+typealias UTF16 = Unicode.UTF16
+typealias UTF32 = Unicode.UTF32
+
+UnicodeAPIs.test("UTF-8 and UTF-16 queries") {
+  guard #available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *) else {
+    return
+  }
+  let str = "abéÏ01😓🎃👨‍👨‍👧‍👦アイウエオ"
+  let scalars = Array(str.unicodeScalars)
+  for scalar in scalars {
+    expectEqual(String(scalar).utf16.count, UTF16.width(scalar))
+    expectEqual(String(scalar).utf8.count, UTF8.width(scalar))
+
+    expectEqual(UTF32.isASCII(scalar.value), UTF8.isASCII(scalar.utf8[0]))
+    expectEqual(UTF32.isASCII(scalar.value), ASCII.isASCII(scalar.utf8[0]))
+    expectEqual(UTF32.isASCII(scalar.value), UTF16.isASCII(scalar.utf16[0]))
+
+    if scalar.utf16.count == 2 {
+      let lead = scalar.utf16[0]
+      let trail = scalar.utf16[1]
+      expectTrue(UTF16.isLeadSurrogate(lead))
+      expectTrue(UTF16.isSurrogate(lead))
+      expectFalse(UTF16.isASCII(lead))
+
+      expectTrue(UTF16.isTrailSurrogate(trail))
+      expectTrue(UTF16.isSurrogate(trail))
+    } else {
+      let codeUnit = scalar.utf16[0]
+      expectFalse(UTF16.isLeadSurrogate(codeUnit))
+      expectFalse(UTF16.isTrailSurrogate(codeUnit))
+      expectFalse(UTF16.isSurrogate(codeUnit))
+
+      expectEqual(codeUnit <= 0x7F, UTF16.isASCII(codeUnit))
+    }
+
+    expectFalse(UTF8.isContinuation(scalar.utf8[0]))
+    if scalar.utf8.count == 1 {
+      let ascii = scalar.utf8[0]
+      expectFalse(UTF8.isContinuation(ascii))
+      expectTrue(UTF8.isASCII(ascii))
+    } else {
+      expectFalse(UTF8.isASCII(scalar.utf8[0]))
+      expectFalse(UTF8.isContinuation(scalar.utf8[0]))
+      for i in 1..<scalar.utf8.count {
+        expectTrue(UTF8.isContinuation(scalar.utf8[i]))
+        expectFalse(UTF8.isASCII(scalar.utf8[i]))
+      }
+    }
+  }
 }
 
 runAllTests()

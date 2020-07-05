@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -109,24 +109,25 @@ public:
 class StackAddress {
   /// The address of an object of type T.
   Address Addr;
-  /// The stack pointer location to reset to when this stack object is
-  /// deallocated.
-  llvm::Value *StackPtrResetLocation;
+
+  /// In a normal function, the result of llvm.stacksave or null.
+  /// In a coroutine, the result of llvm.coro.alloca.alloc.
+  llvm::Value *ExtraInfo;
 
 public:
-  StackAddress() : StackPtrResetLocation(nullptr) {}
-  StackAddress(Address address)
-    : Addr(address), StackPtrResetLocation(nullptr) {}
-  StackAddress(Address address, llvm::Value *SP)
-      : Addr(address), StackPtrResetLocation(SP) {}
+  StackAddress() : ExtraInfo(nullptr) {}
+  StackAddress(Address address, llvm::Value *extraInfo = nullptr)
+    : Addr(address), ExtraInfo(extraInfo) {}
+
+  /// Return a StackAddress with the address changed in some superficial way.
+  StackAddress withAddress(Address addr) const {
+    return StackAddress(addr, ExtraInfo);
+  }
 
   llvm::Value *getAddressPointer() const { return Addr.getAddress(); }
   Alignment getAlignment() const { return Addr.getAlignment(); }
   Address getAddress() const { return Addr; }
-  bool needsSPRestore() const { return StackPtrResetLocation != nullptr; }
-  llvm::Value *getSavedSP() const {
-    assert(StackPtrResetLocation && "Expect a valid stacksave");
-    return StackPtrResetLocation; }
+  llvm::Value *getExtraInfo() const { return ExtraInfo; }
 
   bool isValid() const { return Addr.isValid(); }
 };

@@ -1,6 +1,6 @@
 // REQUIRES: OS=macosx
 // RUN: %sourcekitd-test -req=doc-info -module MyError -- -I %S/Inputs \
-// RUN:         %mcp_opt -sdk %sdk | %sed_clean > %t.response
+// RUN:         -sdk %sdk | %sed_clean > %t.response
 // RUN: %FileCheck -input-file=%t.response %s
 
 // CHECK: struct MyError {
@@ -13,8 +13,8 @@
 
 // CHECK:         key.kind: source.lang.swift.decl.struct,
 // CHECK-NEXT:    key.name: "MyError",
-// CHECK-NEXT:    key.usr: "s:VSC7MyError",
-// CHECK-NEXT:    This is my cool error code.
+// CHECK-NEXT:    key.usr: "s:SC11MyErrorCodeLeV",
+// CHECK-NOT:     This is my cool error code.
 
 // CHECK:             key.kind: source.lang.swift.decl.enum,
 // CHECK-NEXT:        key.name: "Code",
@@ -28,5 +28,5 @@
 
 // CHECK:             key.kind: source.lang.swift.decl.var.static,
 // CHECK-NEXT:        key.name: "errFirst",
-// CHECK-NEXT:        key.usr: "s:ZvVSC7MyError8errFirstOS_4Code",
+// CHECK-NEXT:        key.usr: "s:SC11MyErrorCodeLeV8errFirstSoAAVvpZ",
 // CHECK-NEXT:        This is first error.

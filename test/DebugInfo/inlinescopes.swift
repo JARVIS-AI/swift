@@ -1,18 +1,15 @@
-// RUN: rm -rf %t
-// RUN: mkdir -p %t
+// RUN: %empty-directory(%t)
 // RUN: echo "public var x = Int64()" \
 // RUN:   | %target-swift-frontend -module-name FooBar -emit-module -o %t -
 // RUN: %target-swift-frontend %s -O -I %t -emit-ir -g -o %t.ll
 // RUN: %FileCheck %s < %t.ll
 // RUN: %FileCheck %s -check-prefix=TRANSPARENT-CHECK < %t.ll
 
-// CHECK: define{{( protected)?( signext)?}} i32 @main
-// CHECK: call {{.*}}noinline{{.*}}, !dbg ![[CALL:.*]]
-// CHECK-DAG: ![[TOPLEVEL:.*]] = !DIFile(filename: "inlinescopes.swift"
+// CHECK: define{{( dllexport)?}}{{( protected)?( signext)?}} i32 @main{{.*}}
+// CHECK: call swiftcc i64 @"$s4main8noinlineys5Int64VADF"(i64 %{{.*}}), !dbg ![[CALL:.*]]
+// CHECK-DAG: ![[TOPLEVEL:.*]] = !DIFile(filename: "{{.*}}inlinescopes.swift"
 
 import FooBar
-
-func use<T>(_ t: T) {}
 
 @inline(never)
 func noinline(_ x: Int64) -> Int64 { return x }
@@ -30,8 +27,7 @@ func inlined(_ x: Int64) -> Int64 {
   return result
 }
 // CHECK-DAG: !DIGlobalVariable(name: "y",{{.*}} file: ![[TOPLEVEL]],{{.*}} line: [[@LINE+1]]
-let y = inlined(x)
-use(y)
+public let y = inlined(x)
 
 // Check if the inlined and removed function still has the correct linkage name.
-// CHECK-DAG: !DISubprogram(name: "inlined", linkageName: "_TF4main7inlinedFVs5Int64S0_"
+// CHECK-DAG: !DISubprogram(name: "inlined", linkageName: "$s4main7inlinedys5Int64VADF"

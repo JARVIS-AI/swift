@@ -1,4 +1,4 @@
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -29,6 +29,38 @@ class TestPersonNameComponents : TestPersonNameComponentsSuper {
         result.familyName = familyName
         return result
     }
+
+    func test_Hashing() {
+        guard #available(macOS 10.13, iOS 11.0, *) else {
+            // PersonNameComponents was available in earlier versions, but its
+            // hashing did not match its definition for equality.
+            return
+        }
+
+        let values: [[PersonNameComponents]] = [
+            [
+                makePersonNameComponents(givenName: "Kevin", familyName: "Frank"),
+                makePersonNameComponents(givenName: "Kevin", familyName: "Frank"),
+            ],
+            [
+                makePersonNameComponents(givenName: "John", familyName: "Frank"),
+                makePersonNameComponents(givenName: "John", familyName: "Frank"),
+            ],
+            [
+                makePersonNameComponents(givenName: "Kevin", familyName: "Appleseed"),
+                makePersonNameComponents(givenName: "Kevin", familyName: "Appleseed"),
+            ],
+            [
+                makePersonNameComponents(givenName: "John", familyName: "Appleseed"),
+                makePersonNameComponents(givenName: "John", familyName: "Appleseed"),
+            ]
+        ]
+        checkHashableGroups(
+            values,
+            // FIXME: PersonNameComponents hashes aren't seeded.
+            allowIncompleteHashing: true)
+    }
+
     func test_AnyHashableContainingPersonNameComponents() {
         if #available(OSX 10.11, iOS 9.0, *) {
             let values: [PersonNameComponents] = [
@@ -72,6 +104,7 @@ class TestPersonNameComponents : TestPersonNameComponentsSuper {
 
 #if !FOUNDATION_XCTEST
 var PersonNameComponentsTests = TestSuite("TestPersonNameComponents")
+PersonNameComponentsTests.test("test_Hashing") { TestPersonNameComponents().test_Hashing() }
 PersonNameComponentsTests.test("test_AnyHashableContainingPersonNameComponents") { TestPersonNameComponents().test_AnyHashableContainingPersonNameComponents() }
 PersonNameComponentsTests.test("test_AnyHashableCreatedFromNSPersonNameComponents") { TestPersonNameComponents().test_AnyHashableCreatedFromNSPersonNameComponents() }
 runAllTests()

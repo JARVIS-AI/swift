@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -16,10 +16,36 @@
 
 using namespace SourceKit;
 
-SourceKit::Context::Context(StringRef RuntimeLibPath,
+GlobalConfig::Settings
+GlobalConfig::update(Optional<bool> OptimizeForIDE,
+                     Optional<unsigned> CompletionCheckDependencyInterval) {
+  llvm::sys::ScopedLock L(Mtx);
+  if (OptimizeForIDE.hasValue())
+    State.OptimizeForIDE = *OptimizeForIDE;
+  if (CompletionCheckDependencyInterval.hasValue())
+    State.CompletionCheckDependencyInterval = *CompletionCheckDependencyInterval;
+  return State;
+};
+
+bool GlobalConfig::shouldOptimizeForIDE() const {
+  llvm::sys::ScopedLock L(Mtx);
+  return State.OptimizeForIDE;
+}
+unsigned GlobalConfig::getCompletionCheckDependencyInterval() const {
+  llvm::sys::ScopedLock L(Mtx);
+  return State.CompletionCheckDependencyInterval;
+}
+
+SourceKit::Context::Context(
+    StringRef RuntimeLibPath, StringRef DiagnosticDocumentationPath,
     llvm::function_ref<std::unique_ptr<LangSupport>(Context &)>
-    LangSupportFactoryFn) : RuntimeLibPath(RuntimeLibPath),
-    NotificationCtr(new NotificationCenter()) {
+        LangSupportFactoryFn,
+    bool shouldDispatchNotificationsOnMain)
+    : RuntimeLibPath(RuntimeLibPath),
+      DiagnosticDocumentationPath(DiagnosticDocumentationPath),
+      NotificationCtr(
+          new NotificationCenter(shouldDispatchNotificationsOnMain)),
+      Config(new GlobalConfig()) {
   // Should be called last after everything is initialized.
   SwiftLang = LangSupportFactoryFn(*this);
 }

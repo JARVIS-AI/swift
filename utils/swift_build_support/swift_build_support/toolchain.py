@@ -2,7 +2,7 @@
 #
 # This source file is part of the Swift.org open source project
 #
-# Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+# Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 # Licensed under Apache License v2.0 with Runtime Library Exception
 #
 # See https://swift.org/LICENSE.txt for license information
@@ -18,10 +18,12 @@ from __future__ import absolute_import
 
 import platform
 
-from . import cache_util
+from build_swift.build_swift import cache_utils
+from build_swift.build_swift.shell import which
+from build_swift.build_swift.wrappers import xcrun
+
 from . import shell
-from . import xcrun
-from .which import which
+
 
 __all__ = [
     'host_toolchain',
@@ -42,15 +44,25 @@ def _register(name, *tool):
     def _getter(self):
         return self.find_tool(*tool)
     _getter.__name__ = name
-    setattr(Toolchain, name, cache_util.reify(_getter))
-_register("cc", "clang")
-_register("cxx", "clang++")
+    setattr(Toolchain, name, cache_utils.reify(_getter))
+
+
+if platform.system() == 'Windows':
+    _register("cc", "clang-cl")
+    _register("cxx", "clang-cl")
+else:
+    _register("cc", "clang")
+    _register("cxx", "clang++")
+
 _register("ninja", "ninja", "ninja-build")
 _register("cmake", "cmake")
 _register("distcc", "distcc")
 _register("distcc_pump", "distcc-pump", "pump")
 _register("llvm_profdata", "llvm-profdata")
 _register("llvm_cov", "llvm-cov")
+_register("lipo", "lipo")
+_register("libtool", "libtool")
+_register("swiftc", "swiftc")
 
 
 class Darwin(Toolchain):
@@ -150,7 +162,7 @@ class FreeBSD(GenericUnix):
             suffixes = ['38', '37', '36', '35']
         super(FreeBSD, self).__init__(suffixes)
 
-    @cache_util.reify
+    @cache_utils.reify
     def _release_date(self):
         """Return the release date for FreeBSD operating system on this host.
         If the release date cannot be ascertained, return None.
@@ -164,9 +176,28 @@ class FreeBSD(GenericUnix):
         return int(out)
 
 
+class OpenBSD(GenericUnix):
+    def __init__(self):
+        super(OpenBSD, self).__init__([''])
+
+
 class Cygwin(Linux):
     # Currently, Cygwin is considered as the same as Linux.
     pass
+
+
+class Windows(Toolchain):
+    def find_tool(self, *names):
+        for name in names:
+            found = which(name)
+            if found is not None:
+                return found
+        return None
+
+
+class Haiku(GenericUnix):
+    def __init__(self):
+        super(Haiku, self)
 
 
 def host_toolchain(**kwargs):
@@ -177,8 +208,14 @@ def host_toolchain(**kwargs):
         return Linux()
     elif sys == 'FreeBSD':
         return FreeBSD()
+    elif sys == 'OpenBSD':
+        return OpenBSD()
     elif sys.startswith('CYGWIN'):
         return Cygwin()
+    elif sys == 'Windows':
+        return Windows()
+    elif sys == 'Haiku':
+        return Haiku()
     else:
-        raise NotImplementedError(
-            'toolchain() is not supported in this platform')
+        raise NotImplementedError('The platform "%s" does not have a defined '
+                                  'toolchain.' % sys)

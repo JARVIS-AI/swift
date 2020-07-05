@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -11,10 +11,12 @@
 //===----------------------------------------------------------------------===//
 
 import TestsUtils
-import Foundation
-
 
 // A micro benchmark for checking the speed of string-based enums.
+public let OpenClose = BenchmarkInfo(
+  name: "OpenClose",
+  runFunction: run_OpenClose,
+  tags: [.validation, .api, .String])
 
 enum MyState : String {
     case Closed = "Closed"
@@ -30,8 +32,7 @@ func check_state(_ state : MyState) -> Int {
 public func run_OpenClose(_ N: Int) {
   var c = 0
   for _ in 1...N*10000 {
-      c += check_state(MyState.Closed)
+      c += check_state(identity(MyState.Closed))
   }
-  CheckResults(c == 0, "IncorrectResults in run_OpenClose")
+  CheckResults(c == 0)
 }
-

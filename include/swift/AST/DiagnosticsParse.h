@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -11,7 +11,7 @@
 //===----------------------------------------------------------------------===//
 //
 /// \file
-/// \brief This file defines diagnostics for lexing and parsing.
+/// This file defines diagnostics for lexing and parsing.
 //
 //===----------------------------------------------------------------------===//
 
@@ -25,6 +25,8 @@ namespace swift {
   // Declare common diagnostics objects with their appropriate types.
 #define DIAG(KIND,ID,Options,Text,Signature) \
   extern detail::DiagWithArguments<void Signature>::type ID;
+#define FIXIT(ID,Text,Signature) \
+  extern detail::StructuredFixItWithArguments<void Signature>::type ID;
 #include "DiagnosticsParse.def"
   }
 }

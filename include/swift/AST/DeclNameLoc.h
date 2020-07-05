@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -105,6 +105,14 @@ public:
     return getSourceLocs()[FirstArgumentLabelIndex + index];
   }
 
+  SourceLoc getStartLoc() const {
+    return getBaseNameLoc();
+  }
+
+  SourceLoc getEndLoc() const {
+    return NumArgumentLabels == 0 ? getBaseNameLoc() : getRParenLoc();
+  }
+  
   /// Retrieve the complete source range for this declaration name.
   SourceRange getSourceRange() const {
     if (NumArgumentLabels == 0) return getBaseNameLoc();

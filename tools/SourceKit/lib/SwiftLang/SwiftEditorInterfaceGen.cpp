@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -16,6 +16,7 @@
 
 #include "swift/AST/ASTPrinter.h"
 #include "swift/AST/ASTWalker.h"
+#include "swift/Basic/Version.h"
 #include "swift/Frontend/Frontend.h"
 #include "swift/Frontend/PrintingDiagnosticConsumer.h"
 #include "swift/IDE/ModuleInterfacePrinting.h"
@@ -75,7 +76,7 @@ public:
   CompilerInvocation Invocation;
   PrintingDiagnosticConsumer DiagConsumer;
   CompilerInstance Instance;
-  Module *Mod = nullptr;
+  ModuleDecl *Mod = nullptr;
   SourceTextInfo Info;
   // This is the non-typechecked AST for the generated interface source.
   CompilerInstance TextCI;
@@ -90,8 +91,8 @@ typedef SwiftInterfaceGenContext::Implementation::TextReference TextReference;
 typedef SwiftInterfaceGenContext::Implementation::TextDecl TextDecl;
 typedef SwiftInterfaceGenContext::Implementation::SourceTextInfo SourceTextInfo;
 
-static Module *getModuleByFullName(ASTContext &Ctx, StringRef ModuleName) {
-  SmallVector<std::pair<Identifier, SourceLoc>, 4>
+static ModuleDecl *getModuleByFullName(ASTContext &Ctx, StringRef ModuleName) {
+  SmallVector<Located<Identifier>, 4>
       AccessPath;
   while (!ModuleName.empty()) {
     StringRef SubModuleName;
@@ -101,8 +102,8 @@ static Module *getModuleByFullName(ASTContext &Ctx, StringRef ModuleName) {
   return Ctx.getModule(AccessPath);
 }
 
-static Module *getModuleByFullName(ASTContext &Ctx, Identifier ModuleName) {
-  return Ctx.getModule(std::make_pair(ModuleName, SourceLoc()));
+static ModuleDecl *getModuleByFullName(ASTContext &Ctx, Identifier ModuleName) {
+  return Ctx.getModule({ Located<Identifier>(ModuleName, SourceLoc()) });
 }
 
 namespace {
@@ -124,25 +125,26 @@ public:
   AnnotatingPrinter(SourceTextInfo &Info, llvm::raw_ostream &OS)
     : StreamPrinter(OS), Info(Info) { }
 
-  ~AnnotatingPrinter() {
+  ~AnnotatingPrinter() override {
     assert(DeclUSRs.empty() && "unmatched printDeclLoc call ?");
   }
 
-
   void printSynthesizedExtensionPre(const ExtensionDecl *ED,
-                                    const NominalTypeDecl *Target,
+                                    TypeOrExtensionDecl Target,
                                     Optional<BracketOptions> Bracket) override {
     // When we start print a synthesized extension, record the target's USR.
     llvm::SmallString<64> Buf;
     llvm::raw_svector_ostream OS(Buf);
-    if (!SwiftLangSupport::printUSR(Target, OS)) {
-      TargetUSR = OS.str();
+    auto TargetNTD = Target.getBaseNominal();
+    if (!SwiftLangSupport::printUSR(TargetNTD, OS)) {
+      TargetUSR = std::string(OS.str());
     }
   }
 
-  void printSynthesizedExtensionPost(const ExtensionDecl *ED,
-                                     const NominalTypeDecl *Target,
-                                     Optional<BracketOptions> Bracket) override {
+  void
+  printSynthesizedExtensionPost(const ExtensionDecl *ED,
+                                TypeOrExtensionDecl Target,
+                                Optional<BracketOptions> Bracket) override {
     // When we leave a synthesized extension, clear target's USR.
     TargetUSR = "";
   }
@@ -189,10 +191,12 @@ public:
     }
   }
 
-  void printTypeRef(Type T, const TypeDecl *TD, Identifier Name) override {
+  void printTypeRef(
+      Type T, const TypeDecl *TD, Identifier Name,
+      PrintNameContext NameContext = PrintNameContext::Normal) override {
     unsigned StartOffset = OS.tell();
     Info.References.emplace_back(TD, StartOffset, Name.str().size());
-    StreamPrinter::printTypeRef(T, TD, Name);
+    StreamPrinter::printTypeRef(T, TD, Name, NameContext);
   }
 
   void printModuleRef(ModuleEntity Mod, Identifier Name) override {
@@ -223,20 +227,20 @@ public:
   }
 };
 
-}
+} // end anonymous namespace
 
-static bool makeParserAST(CompilerInstance &CI, StringRef Text) {
-  CompilerInvocation Invocation;
+static bool makeParserAST(CompilerInstance &CI, StringRef Text,
+                          CompilerInvocation Invocation) {
+  Invocation.getFrontendOptions().InputsAndOutputs.clearInputs();
   Invocation.setModuleName("main");
-  Invocation.setInputKind(InputFileKind::IFK_Swift);
+  Invocation.setInputKind(InputFileKind::Swift);
+  Invocation.getLangOptions().DisablePoundIfEvaluation = true;
 
   std::unique_ptr<llvm::MemoryBuffer> Buf;
   Buf = llvm::MemoryBuffer::getMemBuffer(Text, "<module-interface>");
-  Invocation.addInputBuffer(Buf.get());
-  if (CI.setup(Invocation))
-    return true;
-  CI.performParseOnly();
-  return false;
+  Invocation.getFrontendOptions().InputsAndOutputs.addInput(
+      InputFile(Buf.get()->getBufferIdentifier(), false, Buf.get()));
+  return CI.setup(Invocation);
 }
 
 static void reportSyntacticAnnotations(CompilerInstance &CI,
@@ -281,7 +285,7 @@ static bool getModuleInterfaceInfo(ASTContext &Ctx,
                                    std::string &ErrMsg,
                                    bool SynthesizedExtensions,
                                    Optional<StringRef> InterestedUSR) {
-  Module *&Mod = Impl.Mod;
+  ModuleDecl *&Mod = Impl.Mod;
   SourceTextInfo &Info = Impl.Info;
 
   if (ModuleName.empty()) {
@@ -297,26 +301,7 @@ static bool getModuleInterfaceInfo(ASTContext &Ctx,
     return true;
   }
 
-  std::vector<StringRef> SplitModuleName;
-  while (!ModuleName.empty()) {
-    StringRef SubModuleName;
-    std::tie(SubModuleName, ModuleName) = ModuleName.split('.');
-    SplitModuleName.push_back(SubModuleName);
-  }
-  assert(!SplitModuleName.empty());
-
-  // FIXME: If this is a submodule, get its top-level module, which will be the
-  // DeclContext for all of its Decls since we don't have first-class submodules.
-  if (SplitModuleName.size() > 1) {
-    Mod = getModuleByFullName(Ctx, SplitModuleName[0]);
-    if (!Mod) {
-      ErrMsg = "Could not load module: ";
-      ErrMsg += ModuleName;
-      return true;
-    }
-  }
-
-  PrintOptions Options = PrintOptions::printInterface();
+  PrintOptions Options = PrintOptions::printModuleInterface();
   ModuleTraversalOptions TraversalOptions = None; // Don't print submodules.
   SmallString<128> Text;
   llvm::raw_svector_ostream OS(Text);
@@ -324,13 +309,13 @@ static bool getModuleInterfaceInfo(ASTContext &Ctx,
   if (!Group && InterestedUSR) {
     Group = findGroupNameForUSR(Mod, InterestedUSR.getValue());
   }
-  printSubmoduleInterface(Mod, SplitModuleName,
-    Group.hasValue() ? llvm::makeArrayRef(Group.getValue()) : ArrayRef<StringRef>(),
-                          TraversalOptions,
-                          Printer, Options,
-                          Group.hasValue() && SynthesizedExtensions);
+  printModuleInterface(Mod, Group.hasValue()
+                         ? llvm::makeArrayRef(Group.getValue())
+                         : ArrayRef<StringRef>(),
+                       TraversalOptions, Printer, Options,
+                       Group.hasValue() && SynthesizedExtensions);
 
-  Info.Text = OS.str();
+  Info.Text = std::string(OS.str());
   return false;
 }
 
@@ -343,14 +328,14 @@ static bool getHeaderInterfaceInfo(ASTContext &Ctx,
     return true;
   }
 
-  PrintOptions Options = PrintOptions::printInterface();
+  PrintOptions Options = PrintOptions::printModuleInterface();
 
   SmallString<128> Text;
   llvm::raw_svector_ostream OS(Text);
   AnnotatingPrinter Printer(Info, OS);
   printHeaderInterface(HeaderName, Ctx, Printer, Options);
 
-  Info.Text = OS.str();
+  Info.Text = std::string(OS.str());
   return false;
 }
 
@@ -358,11 +343,12 @@ SwiftInterfaceGenContextRef
 SwiftInterfaceGenContext::createForSwiftSource(StringRef DocumentName,
                                                StringRef SourceFileName,
                                                ASTUnitRef AstUnit,
+                                               CompilerInvocation Invocation,
                                                std::string &ErrMsg) {
   SwiftInterfaceGenContextRef IFaceGenCtx{ new SwiftInterfaceGenContext() };
-  IFaceGenCtx->Impl.DocumentName = DocumentName;
+  IFaceGenCtx->Impl.DocumentName = DocumentName.str();
   IFaceGenCtx->Impl.IsModule = true;
-  IFaceGenCtx->Impl.ModuleOrHeaderName = SourceFileName;
+  IFaceGenCtx->Impl.ModuleOrHeaderName = SourceFileName.str();
   IFaceGenCtx->Impl.AstUnit = AstUnit;
 
   PrintOptions Options = PrintOptions::printSwiftFileInterface();
@@ -370,8 +356,9 @@ SwiftInterfaceGenContext::createForSwiftSource(StringRef DocumentName,
   llvm::raw_svector_ostream OS(Text);
   AnnotatingPrinter Printer(IFaceGenCtx->Impl.Info, OS);
   printSwiftSourceInterface(AstUnit->getPrimarySourceFile(), Printer, Options);
-  IFaceGenCtx->Impl.Info.Text = OS.str();
-  if (makeParserAST(IFaceGenCtx->Impl.TextCI, IFaceGenCtx->Impl.Info.Text)) {
+  IFaceGenCtx->Impl.Info.Text = std::string(OS.str());
+  if (makeParserAST(IFaceGenCtx->Impl.TextCI, IFaceGenCtx->Impl.Info.Text,
+                    Invocation)) {
     ErrMsg = "Error during syntactic parsing";
     return nullptr;
   }
@@ -388,16 +375,16 @@ SwiftInterfaceGenContext::create(StringRef DocumentName,
                                  bool SynthesizedExtensions,
                                  Optional<StringRef> InterestedUSR) {
   SwiftInterfaceGenContextRef IFaceGenCtx{ new SwiftInterfaceGenContext() };
-  IFaceGenCtx->Impl.DocumentName = DocumentName;
+  IFaceGenCtx->Impl.DocumentName = DocumentName.str();
   IFaceGenCtx->Impl.IsModule = IsModule;
-  IFaceGenCtx->Impl.ModuleOrHeaderName = ModuleOrHeaderName;
+  IFaceGenCtx->Impl.ModuleOrHeaderName = ModuleOrHeaderName.str();
   IFaceGenCtx->Impl.Invocation = Invocation;
   CompilerInstance &CI = IFaceGenCtx->Impl.Instance;
 
   // Display diagnostics to stderr.
   CI.addDiagnosticConsumer(&IFaceGenCtx->Impl.DiagConsumer);
 
-  Invocation.clearInputs();
+  Invocation.getFrontendOptions().InputsAndOutputs.clearInputs();
   if (CI.setup(Invocation)) {
     ErrMsg = "Error during invocation setup";
     return nullptr;
@@ -434,7 +421,8 @@ SwiftInterfaceGenContext::create(StringRef DocumentName,
       return nullptr;
   }
 
-  if (makeParserAST(IFaceGenCtx->Impl.TextCI, IFaceGenCtx->Impl.Info.Text)) {
+  if (makeParserAST(IFaceGenCtx->Impl.TextCI, IFaceGenCtx->Impl.Info.Text,
+                    Invocation)) {
     ErrMsg = "Error during syntactic parsing";
     return nullptr;
   }
@@ -448,7 +436,7 @@ SwiftInterfaceGenContext::createForTypeInterface(CompilerInvocation Invocation,
                                                  std::string &ErrorMsg) {
   SwiftInterfaceGenContextRef IFaceGenCtx{ new SwiftInterfaceGenContext() };
   IFaceGenCtx->Impl.IsModule = false;
-  IFaceGenCtx->Impl.ModuleOrHeaderName = TypeUSR;
+  IFaceGenCtx->Impl.ModuleOrHeaderName = TypeUSR.str();
   IFaceGenCtx->Impl.Invocation = Invocation;
   CompilerInstance &CI = IFaceGenCtx->Impl.Instance;
   SourceTextInfo &Info = IFaceGenCtx->Impl.Info;
@@ -460,6 +448,7 @@ SwiftInterfaceGenContext::createForTypeInterface(CompilerInvocation Invocation,
     ErrorMsg = "Error during invocation setup";
     return nullptr;
   }
+  registerIDETypeCheckRequestFunctions(CI.getASTContext().evaluator);
   CI.performSema();
   ASTContext &Ctx = CI.getASTContext();
   CloseClangModuleFiles scopedCloseFiles(*Ctx.getClangModuleLoader());
@@ -481,8 +470,9 @@ SwiftInterfaceGenContext::createForTypeInterface(CompilerInvocation Invocation,
   if (ide::printTypeInterface(Module, TypeUSR, Printer,
                               IFaceGenCtx->Impl.DocumentName, ErrorMsg))
     return nullptr;
-  IFaceGenCtx->Impl.Info.Text = OS.str();
-  if (makeParserAST(IFaceGenCtx->Impl.TextCI, IFaceGenCtx->Impl.Info.Text)) {
+  IFaceGenCtx->Impl.Info.Text = std::string(OS.str());
+  if (makeParserAST(IFaceGenCtx->Impl.TextCI, IFaceGenCtx->Impl.Info.Text,
+                    Invocation)) {
     ErrorMsg = "Error during syntactic parsing";
     return nullptr;
   }
@@ -507,6 +497,10 @@ StringRef SwiftInterfaceGenContext::getModuleOrHeaderName() const {
 bool SwiftInterfaceGenContext::isModule() const {
   return Impl.IsModule;
 }
+
+ModuleDecl *SwiftInterfaceGenContext::getModuleDecl() const {
+  return Impl.Mod;
+};
 
 bool SwiftInterfaceGenContext::matches(StringRef ModuleName,
                                        const swift::CompilerInvocation &Invok) {
@@ -653,7 +647,7 @@ void SwiftLangSupport::editorOpenTypeInterface(EditorConsumer &Consumer,
 
   CompilerInvocation Invocation;
   std::string Error;
-  if (getASTManager().initCompilerInvocation(Invocation, Args, CI.getDiags(),
+  if (getASTManager()->initCompilerInvocation(Invocation, Args, CI.getDiags(),
                                              StringRef(), Error)) {
     Consumer.handleRequestError(Error.c_str());
     return;
@@ -693,21 +687,10 @@ void SwiftLangSupport::editorOpenInterface(EditorConsumer &Consumer,
 
   CompilerInvocation Invocation;
   std::string Error;
-  if (getASTManager().initCompilerInvocation(Invocation, Args, CI.getDiags(),
-                                             StringRef(), Error)) {
+  if (getASTManager()->initCompilerInvocationNoInputs(Invocation, Args,
+                                                     CI.getDiags(), Error)) {
     Consumer.handleRequestError(Error.c_str());
     return;
-  }
-
-  trace::TracedOperation TracedOp;
-  if (trace::enabled()) {
-    trace::SwiftInvocation SwiftArgs;
-    SwiftArgs.Args.Args.assign(Args.begin(), Args.end());
-    // NOTE: do not use primary file
-    // NOTE: do not use files
-    TracedOp.start(trace::OperationKind::OpenInterface, SwiftArgs,
-                   {std::make_pair("Name", Name),
-                    std::make_pair("ModuleName", ModuleName)});
   }
 
   Invocation.getClangImporterOptions().ImportForwardDeclarations = true;
@@ -738,22 +721,26 @@ class PrimaryFileInterfaceConsumer : public SwiftASTConsumer {
   std::string SourceFileName;
   SwiftInterfaceGenMap &Contexts;
   std::shared_ptr<EditorConsumer> Consumer;
+  SwiftInvocationRef ASTInvok;
 
 public:
   PrimaryFileInterfaceConsumer(StringRef Name, StringRef SourceFileName,
                                SwiftInterfaceGenMap &Contexts,
-                               std::shared_ptr<EditorConsumer> Consumer) :
+                               std::shared_ptr<EditorConsumer> Consumer,
+                               SwiftInvocationRef ASTInvok) :
     Name(Name), SourceFileName(SourceFileName), Contexts(Contexts),
-      Consumer(Consumer) {}
+      Consumer(Consumer), ASTInvok(ASTInvok) {}
 
   void failed(StringRef Error) override {
     Consumer->handleRequestError(Error.data());
   }
 
   void handlePrimaryAST(ASTUnitRef AstUnit) override {
+    CompilerInvocation CompInvok;
+    ASTInvok->applyTo(CompInvok);
     std::string Error;
     auto IFaceGenRef = SwiftInterfaceGenContext::createForSwiftSource(Name,
-      SourceFileName, AstUnit, Error);
+      SourceFileName, AstUnit, CompInvok, Error);
     if (!Error.empty())
       Consumer->handleRequestError(Error.data());
     Contexts.set(Name, IFaceGenRef);
@@ -771,27 +758,20 @@ void SwiftLangSupport::editorOpenSwiftSourceInterface(StringRef Name,
     Consumer->handleRequestError(Error.c_str());
     return;
   }
-  trace::TracedOperation TracedOp;
-  if (trace::enabled()) {
-    trace::SwiftInvocation SwiftArgs;
-    SwiftArgs.Args.Args.assign(Args.begin(), Args.end());
-    // NOTE: do not use primary file
-    // NOTE: do not use files
-    TracedOp.start(trace::OperationKind::OpenInterface, SwiftArgs,
-                   {std::make_pair("Name", Name),
-                     std::make_pair("SourceName", SourceName)});
-  }
   auto AstConsumer = std::make_shared<PrimaryFileInterfaceConsumer>(Name,
-    SourceName, IFaceGenContexts, Consumer);
+    SourceName, IFaceGenContexts, Consumer, Invocation);
   static const char OncePerASTToken = 0;
-  getASTManager().processASTAsync(Invocation, AstConsumer, &OncePerASTToken);
+  getASTManager()->processASTAsync(Invocation, AstConsumer, &OncePerASTToken,
+                                   llvm::vfs::getRealFileSystem());
 }
 
 void SwiftLangSupport::editorOpenHeaderInterface(EditorConsumer &Consumer,
                                                  StringRef Name,
                                                  StringRef HeaderName,
                                                  ArrayRef<const char *> Args,
-                                                 bool SynthesizedExtensions) {
+                                                 bool UsingSwiftArgs,
+                                                 bool SynthesizedExtensions,
+                                                 StringRef swiftVersion) {
   CompilerInstance CI;
   // Display diagnostics to stderr.
   PrintingDiagnosticConsumer PrintDiags;
@@ -799,29 +779,27 @@ void SwiftLangSupport::editorOpenHeaderInterface(EditorConsumer &Consumer,
 
   CompilerInvocation Invocation;
   std::string Error;
-  if (getASTManager().initCompilerInvocation(Invocation, llvm::None, CI.getDiags(),
-                                             StringRef(), Error)) {
+
+  ArrayRef<const char *> SwiftArgs = UsingSwiftArgs ? Args : llvm::None;
+  if (getASTManager()->initCompilerInvocationNoInputs(Invocation, SwiftArgs,
+                                                     CI.getDiags(), Error)) {
     Consumer.handleRequestError(Error.c_str());
     return;
   }
 
-  if (initInvocationByClangArguments(Args, Invocation, Error)) {
+  if (!UsingSwiftArgs && initInvocationByClangArguments(Args, Invocation, Error)) {
     Consumer.handleRequestError(Error.c_str());
     return;
-  }
-
-  trace::TracedOperation TracedOp;
-  if (trace::enabled()) {
-    trace::SwiftInvocation SwiftArgs;
-    SwiftArgs.Args.Args.assign(Args.begin(), Args.end());
-    // NOTE: do not use primary file
-    // NOTE: do not use files
-    TracedOp.start(trace::OperationKind::OpenHeaderInterface, SwiftArgs,
-                   {std::make_pair("Name", Name),
-                    std::make_pair("HeaderName", HeaderName)});
   }
 
   Invocation.getClangImporterOptions().ImportForwardDeclarations = true;
+  if (!swiftVersion.empty()) {
+    auto swiftVer = version::Version::parseVersionString(swiftVersion,
+                                                         SourceLoc(), nullptr);
+    if (swiftVer.hasValue())
+      Invocation.getLangOptions().EffectiveLanguageVersion =
+          swiftVer.getValue();
+  }
   auto IFaceGenRef = SwiftInterfaceGenContext::create(Name,
                                                       /*IsModule=*/false,
                                                       HeaderName,
@@ -843,7 +821,7 @@ void SwiftLangSupport::editorOpenHeaderInterface(EditorConsumer &Consumer,
 
 void SwiftLangSupport::findInterfaceDocument(StringRef ModuleName,
                                              ArrayRef<const char *> Args,
-                       std::function<void(const InterfaceDocInfo &)> Receiver) {
+                       std::function<void(const RequestResult<InterfaceDocInfo> &)> Receiver) {
   InterfaceDocInfo Info;
 
   CompilerInstance CI;
@@ -853,10 +831,9 @@ void SwiftLangSupport::findInterfaceDocument(StringRef ModuleName,
 
   CompilerInvocation Invocation;
   std::string Error;
-  if (getASTManager().initCompilerInvocation(Invocation, Args, CI.getDiags(),
+  if (getASTManager()->initCompilerInvocation(Invocation, Args, CI.getDiags(),
                                              StringRef(), Error)) {
-    Info.Error = Error;
-    return Receiver(Info);
+    return Receiver(RequestResult<InterfaceDocInfo>::fromError(Error));
   }
 
   if (auto IFaceGenRef = IFaceGenContexts.find(ModuleName, Invocation))
@@ -889,8 +866,12 @@ void SwiftLangSupport::findInterfaceDocument(StringRef ModuleName,
 
   const auto &SPOpts = Invocation.getSearchPathOptions();
   addArgPair("-sdk", SPOpts.SDKPath);
-  for (auto &Path : SPOpts.FrameworkSearchPaths)
-    addArgPair("-F", Path);
+  for (auto &FramePath : SPOpts.FrameworkSearchPaths) {
+    if (FramePath.IsSystem)
+      addArgPair("-Fsystem", FramePath.Path);
+    else
+      addArgPair("-F", FramePath.Path);
+  }
   for (auto &Path : SPOpts.ImportSearchPaths)
     addArgPair("-I", Path);
 
@@ -910,5 +891,5 @@ void SwiftLangSupport::findInterfaceDocument(StringRef ModuleName,
   }
   Info.CompilerArgs = NewArgs;
 
-  return Receiver(Info);
+  return Receiver(RequestResult<InterfaceDocInfo>::fromResult(Info));
 }

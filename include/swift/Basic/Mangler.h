@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -13,29 +13,19 @@
 #ifndef SWIFT_BASIC_MANGLER_H
 #define SWIFT_BASIC_MANGLER_H
 
-#include "swift/Basic/ManglingUtils.h"
+#include "swift/Demangling/ManglingUtils.h"
+#include "swift/Demangling/NamespaceMacros.h"
+#include "swift/Basic/Debug.h"
+#include "swift/Basic/LLVM.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/Support/raw_ostream.h"
 
-using llvm::StringRef;
-using llvm::ArrayRef;
-
 namespace swift {
-namespace NewMangling {
-
-/// Returns true if the new mangling scheme should be used.
-///
-/// TODO: remove this function when the old mangling is removed.
-bool useNewMangling();
-  
-/// Select an old or new mangled string, based on useNewMangling().
-///
-/// Also performs test to check if the demangling of both string yield the same
-/// demangling tree.
-/// TODO: remove this function when the old mangling is removed.
-std::string selectMangling(const std::string &Old, const std::string &New);
+namespace Mangle {
+SWIFT_BEGIN_INLINE_NAMESPACE
 
 void printManglingStats();
 
@@ -48,9 +38,10 @@ class Mangler {
 protected:
   template <typename Mangler>
   friend void mangleIdentifier(Mangler &M, StringRef ident);
+  friend class SubstitutionMerging;
 
   /// The storage for the mangled symbol.
-  llvm::SmallVector<char, 128> Storage;
+  llvm::SmallString<128> Storage;
 
   /// The output stream for the mangled symbol.
   llvm::raw_svector_ostream Buffer;
@@ -64,14 +55,19 @@ protected:
   /// Identifier substitutions.
   llvm::StringMap<unsigned> StringSubstitutions;
 
-  /// The position in the Buffer where the last substitution was written.
-  int lastSubstIdx = -2;
-
   /// Word substitutions in mangled identifiers.
   llvm::SmallVector<SubstitutionWord, 26> Words;
 
+  /// Used for repeated substitutions and known substitutions, e.g. A3B, S2i.
+  SubstitutionMerging SubstMerging;
+
+  size_t MaxNumWords = 26;
+
   /// If enabled, non-ASCII names are encoded in modified Punycode.
-  bool UsePunycode;
+  bool UsePunycode = true;
+
+  /// If enabled, repeated entities are mangled using substitutions ('A...').
+  bool UseSubstitutions = true;
 
   /// A helpful little wrapper for an integer value that should be mangled
   /// in a particular, compressed value.
@@ -85,16 +81,34 @@ protected:
     }
   };
 
+  void addSubstWordsInIdent(const WordReplacement &repl) {
+    SubstWordsInIdent.push_back(repl);
+  }
+
+  void addWord(const SubstitutionWord &word) {
+    Words.push_back(word);
+  }
+
   /// Returns the buffer as a StringRef, needed by mangleIdentifier().
   StringRef getBufferStr() const {
     return StringRef(Storage.data(), Storage.size());
   }
 
+  /// Removes the last characters of the buffer by setting it's size to a
+  /// smaller value.
+  void resetBuffer(size_t toPos) {
+    assert(toPos <= Storage.size());
+    Storage.resize(toPos);
+  }
+
 protected:
 
-  Mangler(bool usePunycode) : Buffer(Storage), UsePunycode(usePunycode) { }
+  Mangler() : Buffer(Storage) { }
 
-  /// Adds the mangling prefix.
+  /// Begins a new mangling but does not add the mangling prefix.
+  void beginManglingWithoutPrefix();
+
+  /// Begins a new mangling but and adds the mangling prefix.
   void beginMangling();
 
   /// Finish the mangling of the symbol and return the mangled name.
@@ -104,14 +118,32 @@ protected:
   /// \p stream.
   void finalize(llvm::raw_ostream &stream);
 
+  /// Verify that demangling and remangling works.
+  static void verify(StringRef mangledName);
+
+  SWIFT_DEBUG_DUMP;
+
   /// Appends a mangled identifier string.
   void appendIdentifier(StringRef ident);
 
+  // NOTE: the addSubsitution functions perform the value computation before
+  // the assignment because there is no sequence point synchronising the
+  // computation of the value before the insertion of the new key, resulting in
+  // the computed value being off-by-one causing an undecoration failure during
+  // round-tripping.
   void addSubstitution(const void *ptr) {
-    Substitutions[ptr] = Substitutions.size() + StringSubstitutions.size();
+    if (!UseSubstitutions)
+      return;
+
+    auto value = Substitutions.size() + StringSubstitutions.size();
+    Substitutions[ptr] = value;
   }
   void addSubstitution(StringRef Str) {
-    StringSubstitutions[Str] = Substitutions.size() + StringSubstitutions.size();
+    if (!UseSubstitutions)
+      return;
+
+    auto value = Substitutions.size() + StringSubstitutions.size();
+    StringSubstitutions[Str] = value;
   }
 
   bool tryMangleSubstitution(const void *ptr);
@@ -131,11 +163,6 @@ protected:
   void appendOperator(StringRef op) {
     size_t OldPos = Storage.size();
     Buffer << op;
-    recordOpStat(op, OldPos);
-  }
-  void appendOperator(StringRef op, int natural) {
-    size_t OldPos = Storage.size();
-    Buffer << op << natural << '_';
     recordOpStat(op, OldPos);
   }
   void appendOperator(StringRef op, Index index) {
@@ -162,8 +189,24 @@ protected:
       isFirstListItem = false;
     }
   }
+  void appendOperatorParam(StringRef op) {
+    Buffer << op;
+  }
+  void appendOperatorParam(StringRef op, int natural) {
+    Buffer << op << natural << '_';
+  }
+  void appendOperatorParam(StringRef op, Index index) {
+    Buffer << op << index;
+  }
+  void appendOperatorParam(StringRef op, Index index1, Index index2) {
+    Buffer << op << index1 << index2;
+  }
+  void appendOperatorParam(StringRef op, StringRef arg) {
+    Buffer << op << arg;
+  }
 };
 
+SWIFT_END_INLINE_NAMESPACE
 } // end namespace Mangle
 } // end namespace swift
 

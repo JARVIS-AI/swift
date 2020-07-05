@@ -1,4 +1,3 @@
-// XFAIL: broken_std_regex
 // RUN: %complete-test -tok=INT_OPERATORS %s | %FileCheck %s
 // RUN: %complete-test -add-inner-results -tok=INT_OPERATORS_INNER %s | %FileCheck %s -check-prefix=INNER
 // RUN: %complete-test -raw -hide-none -tok=INT_OPERATORS %s | %FileCheck %s -check-prefix=RAW
@@ -11,6 +10,7 @@ struct MyInt {
   var bigPowers: Int { return 1 }
 }
 func +(x: MyInt, y: MyInt) -> MyInt { return x }
+postfix operator ++
 postfix func ++(x: inout MyInt) -> MyInt { return x }
 func !=(x: MyInt, y: MyInt) -> Bool { return true }
 

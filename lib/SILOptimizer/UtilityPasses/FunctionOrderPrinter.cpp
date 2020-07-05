@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -16,7 +16,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "swift/SILOptimizer/Analysis/FunctionOrder.h"
-#include "swift/Basic/DemangleWrappers.h"
+#include "swift/Demangling/Demangle.h"
 #include "swift/SILOptimizer/Analysis/BasicCalleeAnalysis.h"
 #include "swift/SIL/SILFunction.h"
 #include "swift/SIL/SILModule.h"
@@ -35,8 +35,8 @@ class FunctionOrderPrinterPass : public SILModuleTransform {
   /// The entry point to the transformation.
   void run() override {
     BCA = getAnalysis<BasicCalleeAnalysis>();
-    auto &M = *getModule();
-    BottomUpFunctionOrder Orderer(M, BCA);
+    BottomUpFunctionOrder Orderer(BCA);
+    Orderer.computeBottomUpOrder(getModule());
 
     llvm::outs() << "Bottom up function order:\n";
     auto SCCs = Orderer.getSCCs();
@@ -50,14 +50,13 @@ class FunctionOrderPrinterPass : public SILModuleTransform {
 
       for (auto *F : SCC) {
         llvm::outs() << Indent
-                     << demangle_wrappers::demangleSymbolAsString(F->getName())
+                     << Demangle::demangleSymbolAsString(F->getName())
                      << "\n";
       }
     }
     llvm::outs() << "\n";
   }
 
-  StringRef getName() override { return "Function Order Printer"; }
 };
 
 } // end anonymous namespace

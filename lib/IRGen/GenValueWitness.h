@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -29,41 +29,23 @@ namespace swift {
   class CanType;
 
 namespace irgen {
+  class ConstantStructBuilder;
   class IRGenModule;
+  class ConstantReference;
 
   /// True if a type has a generic-parameter-dependent value witness table.
   /// Currently, this is true if the size and/or alignment of the type is
   /// dependent on its generic parameters.
   bool hasDependentValueWitnessTable(IRGenModule &IGM, CanType ty);
 
-  /// Emit a value-witness table for the given type, which is assumed
-  /// to be non-dependent.
-  llvm::Constant *emitValueWitnessTable(IRGenModule &IGM, CanType type);
-
-  /// Emit the elements of a dependent value witness table template into a
-  /// vector.
-  void emitDependentValueWitnessTablePattern(IRGenModule &IGM,
-                                    CanType abstractType,
-                                    SmallVectorImpl<llvm::Constant*> &fields);
-
-  /// Build a value witness that initializes an array front-to-back.
-  void emitInitializeArrayFrontToBack(IRGenFunction &IGF,
-                                      const TypeInfo &type,
-                                      Address destArray,
-                                      Address srcArray,
-                                      llvm::Value *count,
-                                      SILType T,
-                                      IsTake_t take);
-
-  /// Build a value witness that initializes an array back-to-front.
-  void emitInitializeArrayBackToFront(IRGenFunction &IGF,
-                                      const TypeInfo &type,
-                                      Address destArray,
-                                      Address srcArray,
-                                      llvm::Value *count,
-                                      SILType T,
-                                      IsTake_t take);
-
+  /// Emit a value-witness table for the given type.
+  ///
+  /// \param isPattern - true if the table just serves as an instantiation
+  ///   pattern and does not need to be modifiable in-place (if the type
+  ///   does not have static layout for some reason)
+  ConstantReference emitValueWitnessTable(IRGenModule &IGM, CanType type,
+                                          bool isPattern,
+                                          bool relativeReference);
 }
 }
 

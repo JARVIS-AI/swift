@@ -1,4 +1,4 @@
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -38,14 +38,17 @@ class MyDimensionalUnit : Dimension {
 }
 
 @available(OSX 10.12, iOS 10.0, watchOS 3.0, tvOS 10.0, *)
-class BugUnit : Unit {
-    override init() {
-        super.init(symbol: "bug")
+class CustomUnit : Unit {
+    override init(symbol: String) {
+        super.init(symbol: symbol)
     }
     
     required init?(coder aDecoder: NSCoder) {
         super.init(coder: aDecoder)
     }
+    
+    public static let bugs = CustomUnit(symbol: "bug")
+    public static let features = CustomUnit(symbol: "feature")
 }
 
 @available(OSX 10.12, iOS 10.0, watchOS 3.0, tvOS 10.0, *)
@@ -60,9 +63,9 @@ class TestMeasurement : TestMeasurementSuper {
         expectEqual(6, m3.value)
         expectEqual(m1, m2)
         
-        let m10 = Measurement(value: 2, unit: BugUnit())
-        let m11 = Measurement(value: 2, unit: BugUnit())
-        let m12 = Measurement(value: 3, unit: BugUnit())
+        let m10 = Measurement(value: 2, unit: CustomUnit.bugs)
+        let m11 = Measurement(value: 2, unit: CustomUnit.bugs)
+        let m12 = Measurement(value: 3, unit: CustomUnit.bugs)
         
         expectEqual(m10, m11)
         expectNotEqual(m10, m12)
@@ -83,7 +86,7 @@ class TestMeasurement : TestMeasurementSuper {
         
         // This correctly fails to build
         
-        // let m2 = Measurement(value: 1, unit: BugUnit())
+        // let m2 = Measurement(value: 1, unit: CustomUnit.bugs)
         // m2.converted(to: MyDimensionalUnit.unitKiloA)
     }
     
@@ -107,9 +110,9 @@ class TestMeasurement : TestMeasurementSuper {
         // Dynamically different dimensions
         expectEqual(Measurement(value: 1_001_000, unit: MyDimensionalUnit.unitA), oneMegaA + oneKiloA)
         
-        var bugCount = Measurement(value: 1, unit: BugUnit())
+        var bugCount = Measurement(value: 1, unit: CustomUnit.bugs)
         expectEqual(bugCount.value, 1)
-        bugCount = bugCount + Measurement(value: 4, unit: BugUnit())
+        bugCount = bugCount + Measurement(value: 4, unit: CustomUnit.bugs)
         expectEqual(bugCount.value, 5)
     }
     
@@ -148,6 +151,52 @@ class TestMeasurement : TestMeasurementSuper {
         expectTrue(fiveKM <= fiveThousandM)
     }
 
+    func testHashing() {
+        guard #available(macOS 10.15, iOS 13, watchOS 6, tvOS 13, *) else { return }
+        let lengths: [[Measurement<UnitLength>]] = [
+            [
+                Measurement(value: 5, unit: UnitLength.kilometers),
+                Measurement(value: 5000, unit: UnitLength.meters),
+                Measurement(value: 5000, unit: UnitLength.meters),
+            ],
+            [
+                Measurement(value: 1, unit: UnitLength.kilometers),
+                Measurement(value: 1000, unit: UnitLength.meters),
+            ],
+            [
+                Measurement(value: 1, unit: UnitLength.meters),
+                Measurement(value: 1000, unit: UnitLength.millimeters),
+            ],
+        ]
+        checkHashableGroups(lengths)
+
+        let durations: [[Measurement<UnitDuration>]] = [
+            [
+                Measurement(value: 3600, unit: UnitDuration.seconds),
+                Measurement(value: 60, unit: UnitDuration.minutes),
+                Measurement(value: 1, unit: UnitDuration.hours),
+            ],
+            [
+                Measurement(value: 1800, unit: UnitDuration.seconds),
+                Measurement(value: 30, unit: UnitDuration.minutes),
+                Measurement(value: 0.5, unit: UnitDuration.hours),
+            ]
+        ]
+        checkHashableGroups(durations)
+
+        let custom: [Measurement<CustomUnit>] = [
+            Measurement(value: 1, unit: CustomUnit.bugs),
+            Measurement(value: 2, unit: CustomUnit.bugs),
+            Measurement(value: 3, unit: CustomUnit.bugs),
+            Measurement(value: 4, unit: CustomUnit.bugs),
+            Measurement(value: 1, unit: CustomUnit.features),
+            Measurement(value: 2, unit: CustomUnit.features),
+            Measurement(value: 3, unit: CustomUnit.features),
+            Measurement(value: 4, unit: CustomUnit.features),
+        ]
+        checkHashable(custom, equalityOracle: { $0 == $1 })
+    }
+
     func test_AnyHashableContainingMeasurement() {
         let values: [Measurement<UnitLength>] = [
           Measurement(value: 100, unit: UnitLength.meters),
@@ -179,7 +228,7 @@ class TestMeasurement : TestMeasurementSuper {
 
 #if !FOUNDATION_XCTEST
 if #available(OSX 10.12, iOS 10.0, tvOS 10.0, watchOS 3.0, *) {
-    var MeasurementTests = TestSuite("TestMeasurement")
+    let MeasurementTests = TestSuite("TestMeasurement")
     MeasurementTests.test("testBasicConstruction") { TestMeasurement().testBasicConstruction() }
     MeasurementTests.test("testConversion") { TestMeasurement().testConversion() }
     MeasurementTests.test("testOperators") { TestMeasurement().testOperators() }
@@ -187,6 +236,7 @@ if #available(OSX 10.12, iOS 10.0, tvOS 10.0, watchOS 3.0, *) {
     MeasurementTests.test("testMeasurementFormatter") { TestMeasurement().testMeasurementFormatter() }
     MeasurementTests.test("testEquality") { TestMeasurement().testEquality() }
     MeasurementTests.test("testComparison") { TestMeasurement().testComparison() }
+    MeasurementTests.test("testHashing") { TestMeasurement().testHashing() }
     MeasurementTests.test("test_AnyHashableContainingMeasurement") { TestMeasurement().test_AnyHashableContainingMeasurement() }
   MeasurementTests.test("test_AnyHashableCreatedFromNSMeasurement") { TestMeasurement().test_AnyHashableCreatedFromNSMeasurement() }
     runAllTests()

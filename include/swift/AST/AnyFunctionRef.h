@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -13,6 +13,8 @@
 #ifndef SWIFT_AST_ANY_FUNCTION_REF_H
 #define SWIFT_AST_ANY_FUNCTION_REF_H
 
+#include "swift/Basic/Compiler.h"
+#include "swift/Basic/Debug.h"
 #include "swift/Basic/LLVM.h"
 #include "swift/AST/Decl.h"
 #include "swift/AST/Expr.h"
@@ -23,7 +25,7 @@
 namespace swift {
 class CaptureInfo;
 
-/// \brief A universal function reference -- can wrap all AST nodes that
+/// A universal function reference -- can wrap all AST nodes that
 /// represent functions and exposes a common interface to them.
 class AnyFunctionRef {
   PointerUnion<AbstractFunctionDecl *, AbstractClosureExpr *> TheFunction;
@@ -51,26 +53,40 @@ public:
     }
   }
 
-  CaptureInfo &getCaptureInfo() const {
+  CaptureInfo getCaptureInfo() const {
     if (auto *AFD = TheFunction.dyn_cast<AbstractFunctionDecl *>())
       return AFD->getCaptureInfo();
     return TheFunction.get<AbstractClosureExpr *>()->getCaptureInfo();
+  }
+
+  void setCaptureInfo(CaptureInfo captures) const {
+    if (auto *AFD = TheFunction.dyn_cast<AbstractFunctionDecl *>()) {
+      AFD->setCaptureInfo(captures);
+      return;
+    }
+    TheFunction.get<AbstractClosureExpr *>()->setCaptureInfo(captures);
   }
 
   void getLocalCaptures(SmallVectorImpl<CapturedValue> &Result) const {
     getCaptureInfo().getLocalCaptures(Result);
   }
 
-  ArrayRef<ParameterList *> getParameterLists() const {
-    if (auto *AFD = TheFunction.dyn_cast<AbstractFunctionDecl *>())
-      return AFD->getParameterLists();
-    return TheFunction.get<AbstractClosureExpr *>()->getParameterLists();
-  }
-  
   bool hasType() const {
     if (auto *AFD = TheFunction.dyn_cast<AbstractFunctionDecl *>())
       return AFD->hasInterfaceType();
     return !TheFunction.get<AbstractClosureExpr *>()->getType().isNull();
+  }
+
+  bool hasSingleExpressionBody() const {
+    if (auto *AFD = TheFunction.dyn_cast<AbstractFunctionDecl *>())
+      return AFD->hasSingleExpressionBody();
+    return TheFunction.get<AbstractClosureExpr *>()->hasSingleExpressionBody();
+  }
+
+  Expr *getSingleExpressionBody() const {
+    if (auto *AFD = TheFunction.dyn_cast<AbstractFunctionDecl *>())
+      return AFD->getSingleExpressionBody();
+    return TheFunction.get<AbstractClosureExpr *>()->getSingleExpressionBody();
   }
 
   Type getType() const {
@@ -88,6 +104,16 @@ public:
     return TheFunction.get<AbstractClosureExpr *>()->getResultType();
   }
 
+  ArrayRef<AnyFunctionType::Yield>
+  getYieldResults(SmallVectorImpl<AnyFunctionType::Yield> &buffer) const {
+    return getYieldResultsImpl(buffer, /*mapIntoContext*/ false);
+  }
+
+  ArrayRef<AnyFunctionType::Yield>
+  getBodyYieldResults(SmallVectorImpl<AnyFunctionType::Yield> &buffer) const {
+    return getYieldResultsImpl(buffer, /*mapIntoContext*/ true);
+  }
+
   BraceStmt *getBody() const {
     if (auto *AFD = TheFunction.dyn_cast<AbstractFunctionDecl *>())
       return AFD->getBody();
@@ -95,6 +121,21 @@ public:
     if (auto *CE = dyn_cast<ClosureExpr>(ACE))
       return CE->getBody();
     return cast<AutoClosureExpr>(ACE)->getBody();
+  }
+
+  void setBody(BraceStmt *stmt, bool isSingleExpression) {
+    if (auto *AFD = TheFunction.dyn_cast<AbstractFunctionDecl *>()) {
+      AFD->setBody(stmt);
+      AFD->setHasSingleExpressionBody(isSingleExpression);
+      return;
+    }
+
+    auto *ACE = TheFunction.get<AbstractClosureExpr *>();
+    if (auto *CE = dyn_cast<ClosureExpr>(ACE)) {
+      return CE->setBody(stmt, isSingleExpression);
+    }
+
+    llvm_unreachable("autoclosures don't have statement bodies");
   }
 
   DeclContext *getAsDeclContext() const {
@@ -111,22 +152,19 @@ public:
     return TheFunction.dyn_cast<AbstractClosureExpr*>();
   }
 
+  bool isDeferBody() const {
+    if (auto *fd = dyn_cast_or_null<FuncDecl>(getAbstractFunctionDecl()))
+      return fd->isDeferBody();
+    return false;
+  }
+
   /// Return true if this closure is passed as an argument to a function and is
   /// known not to escape from that function.  In this case, captures can be
   /// more efficient.
   bool isKnownNoEscape() const {
-    if (auto afd = TheFunction.dyn_cast<AbstractFunctionDecl *>()) {
-      // As a hack, assume defer bodies are noescape.
-      if (auto fd = dyn_cast<FuncDecl>(afd))
-        return fd->isDeferBody();
-      return false;
-    }
-
-
-    auto *CE = TheFunction.get<AbstractClosureExpr *>();
-    if (!CE->getType() || CE->getType()->hasError())
-      return false;
-    return CE->getType()->castTo<FunctionType>()->isNoEscape();
+    if (hasType() && !getType()->hasError())
+      return getType()->castTo<AnyFunctionType>()->isNoEscape();
+    return false;
   }
 
   bool isObjC() const {
@@ -149,9 +187,13 @@ public:
     }
     llvm_unreachable("unexpected AnyFunctionRef representation");
   }
-  
-  LLVM_ATTRIBUTE_DEPRECATED(void dump() const LLVM_ATTRIBUTE_USED,
-                            "only for use within the debugger") {
+
+// Disable "only for use within the debugger" warning.
+#if SWIFT_COMPILER_IS_MSVC
+#pragma warning(push)
+#pragma warning(disable: 4996)
+#endif
+  SWIFT_DEBUG_DUMP {
     if (auto afd = TheFunction.dyn_cast<AbstractFunctionDecl *>()) {
       return afd->dump();
     }
@@ -170,7 +212,62 @@ public:
     }
     llvm_unreachable("unexpected AnyFunctionRef representation");
   }
+
+  GenericSignature getGenericSignature() const {
+    if (auto afd = TheFunction.dyn_cast<AbstractFunctionDecl *>()) {
+      return afd->getGenericSignature();
+    }
+    if (auto ce = TheFunction.dyn_cast<AbstractClosureExpr *>()) {
+      return ce->getGenericSignatureOfContext();
+    }
+    llvm_unreachable("unexpected AnyFunctionRef representation");
+  }
+
+  friend bool operator==(AnyFunctionRef lhs, AnyFunctionRef rhs) {
+     return lhs.TheFunction == rhs.TheFunction;
+   }
+
+   friend bool operator!=(AnyFunctionRef lhs, AnyFunctionRef rhs) {
+     return lhs.TheFunction != rhs.TheFunction;
+   }
+
+  friend llvm::hash_code hash_value(AnyFunctionRef fn) {
+    using llvm::hash_value;
+    return hash_value(fn.TheFunction.getOpaqueValue());
+  }
+
+  friend SourceLoc extractNearestSourceLoc(AnyFunctionRef fn) {
+    return fn.getLoc();
+  }
+
+private:
+  ArrayRef<AnyFunctionType::Yield>
+  getYieldResultsImpl(SmallVectorImpl<AnyFunctionType::Yield> &buffer,
+                      bool mapIntoContext) const {
+    assert(buffer.empty());
+    if (auto *AFD = TheFunction.dyn_cast<AbstractFunctionDecl *>()) {
+      if (auto *AD = dyn_cast<AccessorDecl>(AFD)) {
+        if (AD->isCoroutine()) {
+          auto valueTy = AD->getStorage()->getValueInterfaceType()
+                                         ->getReferenceStorageReferent();
+          if (mapIntoContext)
+            valueTy = AD->mapTypeIntoContext(valueTy);
+          YieldTypeFlags flags(AD->getAccessorKind() == AccessorKind::Modify
+                                 ? ValueOwnership::InOut
+                                 : ValueOwnership::Shared);
+          buffer.push_back(AnyFunctionType::Yield(valueTy, flags));
+          return buffer;
+        }
+      }
+    }
+    return {};
+  }
 };
+#if SWIFT_COMPILER_IS_MSVC
+#pragma warning(pop)
+#endif
+
+void simple_display(llvm::raw_ostream &out, AnyFunctionRef fn);
 
 } // namespace swift
 

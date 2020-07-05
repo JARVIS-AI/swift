@@ -34,18 +34,19 @@
 // RUN: %target-swift-ide-test -code-completion -source-filename=%s -code-completion-token=INFIX_8 | %FileCheck %s -check-prefix=S3_INFIX_OPTIONAL
 // RUN: %target-swift-ide-test -code-completion -source-filename=%s -code-completion-token=INFIX_9 | %FileCheck %s -check-prefix=FOOABLE_INFIX
 // RUN: %target-swift-ide-test -code-completion -source-filename=%s -code-completion-token=INFIX_10 | %FileCheck %s -check-prefix=FOOABLE_INFIX
-// RUN: %target-swift-ide-test -code-completion -source-filename=%s -code-completion-token=INFIX_11 | %FileCheck %s -check-prefix=NO_OPERATORS
-// RUN: %target-swift-ide-test -code-completion -source-filename=%s -code-completion-token=INFIX_12 | %FileCheck %s -check-prefix=NO_OPERATORS
+// RUN: %target-swift-ide-test -code-completion -source-filename=%s -code-completion-token=INFIX_11 | %FileCheck %s -check-prefix=INFIX_11
+// RUN: %target-swift-ide-test -code-completion -source-filename=%s -code-completion-token=INFIX_12 | %FileCheck %s -check-prefix=INFIX_12
 // RUN: %target-swift-ide-test -code-completion -source-filename=%s -code-completion-token=INFIX_13 | %FileCheck %s -check-prefix=NO_OPERATORS
 // RUN: %target-swift-ide-test -code-completion -source-filename=%s -code-completion-token=INFIX_14 | %FileCheck %s -check-prefix=NO_OPERATORS
-// RUN: %target-swift-ide-test -code-completion -source-filename=%s -code-completion-token=INFIX_15 | %FileCheck %s -check-prefix=NO_OPERATORS
-// RUN: %target-swift-ide-test -code-completion -source-filename=%s -code-completion-token=INFIX_16 | %FileCheck %s -check-prefix=NO_OPERATORS
-// RUN: %target-swift-ide-test -code-completion -source-filename=%s -code-completion-token=INFIX_17 | %FileCheck %s -check-prefix=NO_OPERATORS
+
+// RUN: %target-swift-ide-test -code-completion -source-filename=%s -code-completion-token=INFIX_15 | %FileCheck %s -check-prefix=INFIX_15
+// RUN: %target-swift-ide-test -code-completion -source-filename=%s -code-completion-token=INFIX_16 | %FileCheck %s -check-prefix=INFIX_16
+// RUN: %target-swift-ide-test -code-completion -source-filename=%s -code-completion-token=INFIX_17 | %FileCheck %s -check-prefix=VOID_OPERATORS
 // RUN: %target-swift-ide-test -code-completion -source-filename=%s -code-completion-token=INFIX_18 | %FileCheck %s -check-prefix=NO_OPERATORS
 // RUN: %target-swift-ide-test -code-completion -source-filename=%s -code-completion-token=INFIX_19 | %FileCheck %s -check-prefix=EMPTYCLASS_INFIX
 // RUN: %target-swift-ide-test -code-completion -source-filename=%s -code-completion-token=INFIX_20 | %FileCheck %s -check-prefix=NO_OPERATORS
 // RUN: %target-swift-ide-test -code-completion -source-filename=%s -code-completion-token=INFIX_21 | %FileCheck %s -check-prefix=NO_OPERATORS
-// RUN: %target-swift-ide-test -code-completion -source-filename=%s -code-completion-token=INFIX_22 | %FileCheck %s -check-prefix=NO_OPERATORS
+// RUN: %target-swift-ide-test -code-completion -source-filename=%s -code-completion-token=INFIX_22 | %FileCheck %s -check-prefix=INFIX_22
 // RUN: %target-swift-ide-test -code-completion -source-filename=%s -code-completion-token=S2_INFIX_SPACE | %FileCheck %s -check-prefix=S2_INFIX_SPACE
 // RUN: %target-swift-ide-test -code-completion -source-filename=%s -code-completion-token=EXT_INFIX_1 | %FileCheck %s -check-prefix=S2_INFIX
 // RUN: %target-swift-ide-test -code-completion -source-filename=%s -code-completion-token=EXT_INFIX_2 > %t.ext_infix_2
@@ -56,6 +57,11 @@
 // RUN: %target-swift-ide-test -code-completion -source-filename=%s -code-completion-token=ASSIGN_TUPLE_1| %FileCheck %s -check-prefix=ASSIGN_TUPLE_1
 // RUN: %target-swift-ide-test -code-completion -source-filename=%s -code-completion-token=ASSIGN_TUPLE_2| %FileCheck %s -check-prefix=ASSIGN_TUPLE_2
 // RUN: %target-swift-ide-test -code-completion -source-filename=%s -code-completion-token=ASSIGN_TUPLE_3| %FileCheck %s -check-prefix=ASSIGN_TUPLE_1
+
+// RUN: %target-swift-ide-test -code-completion -source-filename=%s -code-completion-token=INFIX_AUTOCLOSURE_1 | %FileCheck %s -check-prefix=INFIX_AUTOCLOSURE_1
+// RUN: %target-swift-ide-test -code-completion -source-filename=%s -code-completion-token=INFIX_AUTOCLOSURE_2 | %FileCheck %s -check-prefix=INFIX_AUTOCLOSURE_1
+// RUN: %target-swift-ide-test -code-completion -source-filename=%s -code-completion-token=INFIX_AUTOCLOSURE_3 | %FileCheck %s -check-prefix=INFIX_AUTOCLOSURE_1
+// RUN: %target-swift-ide-test -code-completion -source-filename=%s -code-completion-token=INFIX_AUTOCLOSURE_4 | %FileCheck %s -check-prefix=INFIX_AUTOCLOSURE_1
 
 struct S {}
 postfix operator ++ {}
@@ -113,7 +119,8 @@ func testPostfix7() {
 func testPostfix8(x: S) {
   x#^POSTFIX_8^#
 }
-// POSTFIX_8-NOT: ***
+// POSTFIX_8: Begin completions
+// POSTFIX_8: Keyword[self]/CurrNominal: .self[#S#]; name=self
 
 protocol P {
   associatedtype T
@@ -138,15 +145,20 @@ func testPostfixSpace(x: inout S) {
 
 // ===--- Infix operators
 
+precedencegroup S2PrecedenceGroup {
+  associativity: left
+  lowerThan: ComparisonPrecedence
+  higherThan: AssignmentPrecedence
+}
+precedencegroup S2AssignmentPrecedenceGroup {
+  associativity: none
+  lowerThan: ComparisonPrecedence
+  higherThan: AssignmentPrecedence
+}
+
 struct S2 {}
-infix operator ** {
-  associativity left
-  precedence 123
-}
-infix operator **= {
-  associativity none
-  precedence 123
-}
+infix operator ** : S2PrecedenceGroup
+infix operator **= : S2AssignmentPrecedenceGroup
 func +(x: S2, y: S2) -> S2 { return x }
 func **(x: S2, y: Int) -> S2 { return x }
 func **=(x: inout S2, y: Int) -> Void { return x }
@@ -156,7 +168,7 @@ func testInfix1(x: S2) {
 }
 // S2_INFIX: Begin completions
 // FIXME: rdar://problem/22997089 - should be CurrModule
-// S2_INFIX-DAG: Decl[InfixOperatorFunction]/OtherModule[Swift]:   + {#S2#}[#S2#]
+// S2_INFIX-DAG: Decl[InfixOperatorFunction]/OtherModule[Swift]/IsSystem:   + {#S2#}[#S2#]
 // S2_INFIX-DAG: Decl[InfixOperatorFunction]/CurrModule:   ** {#Int#}[#S2#]; name=**
 // S2_INFIX: End completions
 // NEGATIVE_S2_INFIX-NOT: **=
@@ -172,7 +184,7 @@ func testInfix2(x: inout S2) {
 }
 // S2_INFIX_LVALUE: Begin completions
 // FIXME: rdar://problem/22997089 - should be CurrModule
-// S2_INFIX_LVALUE-DAG: Decl[InfixOperatorFunction]/OtherModule[Swift]:   + {#S2#}[#S2#]
+// S2_INFIX_LVALUE-DAG: Decl[InfixOperatorFunction]/OtherModule[Swift]/IsSystem:   + {#S2#}[#S2#]
 // S2_INFIX_LVALUE-DAG: Decl[InfixOperatorFunction]/CurrModule:   ** {#Int#}[#S2#]
 // S2_INFIX_LVALUE-DAG: Decl[InfixOperatorFunction]/CurrModule:   **= {#Int#}[#Void#]
 // S2_INFIX_LVALUE-DAG: BuiltinOperator/None:                             = {#S2#}[#Void#]
@@ -203,11 +215,9 @@ func testInfix7(x: S2?) {
   x#^INFIX_7^#
 }
 // S2_INFIX_OPTIONAL: Begin completions
-// FIXME: rdar://problem/22996887 - shouldn't complete with optional LHS
-// S2_INFIX_OPTIONAL-DAG: Decl[InfixOperatorFunction]/CurrModule:   ** {#Int#}[#S2#]
-// S2_INFIX_OPTIONAL-DAG: Decl[InfixOperatorFunction]/OtherModule[Swift]:  != {#{{.*}}#}[#Bool#]
-// S2_INFIX_OPTIONAL-DAG: Decl[InfixOperatorFunction]/OtherModule[Swift]:  == {#{{.*}}#}[#Bool#]
-// S2_INFIX_OPTIONAL-DAG: Decl[InfixOperatorFunction]/OtherModule[Swift]:  ?? {#S2#}[#S2#]; name=?? S2
+// S2_INFIX_OPTIONAL-DAG: Decl[InfixOperatorFunction]/OtherModule[Swift]/IsSystem:  != {#{{.*}}#}[#Bool#]
+// S2_INFIX_OPTIONAL-DAG: Decl[InfixOperatorFunction]/OtherModule[Swift]/IsSystem:  == {#{{.*}}#}[#Bool#]
+// S2_INFIX_OPTIONAL-DAG: Decl[InfixOperatorFunction]/OtherModule[Swift]/IsSystem:  ?? {#S2#}[#S2#]; name=?? S2
 // S2_INFIX_OPTIONAL: End completions
 // The equality operators don't come from equatable.
 // NEGATIVE_S2_INFIX_OPTIONAL-NOT: == {#S2
@@ -221,8 +231,7 @@ func testInfix8(x: S3?) {
 }
 // The equality operators come from equatable.
 // S3_INFIX_OPTIONAL: Begin completions
-// S3_INFIX_OPTIONAL-DAG: Decl[InfixOperatorFunction]/OtherModule[Swift]:  != {#S3?#}[#Bool#]
-// S3_INFIX_OPTIONAL-DAG: Decl[InfixOperatorFunction]/OtherModule[Swift]:  == {#S3?#}[#Bool#]
+// S3_INFIX_OPTIONAL-DAG: Decl[InfixOperatorFunction]/OtherModule[Swift]/IsSystem:  == {#S3?#}[#Bool#]
 // S3_INFIX_OPTIONAL: End completions
 
 infix operator **** {
@@ -243,25 +252,63 @@ func testInfix10<T: P where T.T: Fooable>(x: T) {
 func testInfix11() {
   S2#^INFIX_11^#
 }
-// NO_OPERATORS-NOT: Decl[InfixOperatorFunction]
+
+// INFIX_11: Begin completions, 3 items
+// INFIX_11-DAG: Decl[Constructor]/CurrNominal:      ()[#S2#]; name=()
+// INFIX_11-DAG: Keyword[self]/CurrNominal:          .self[#S2.Type#]; name=self
+// INFIX_11-DAG: Keyword/CurrNominal:                .Type[#S2.Type#]; name=Type
+// INFIX_11: End completions
+
 func testInfix12() {
   P#^INFIX_12^#
 }
+// INFIX_12: Begin completions, 4 items
+// INFIX_12-NEXT: Decl[AssociatedType]/CurrNominal:   .T; name=T
+// INFIX_12-NEXT: Keyword[self]/CurrNominal:          .self[#P.Protocol#]; name=self
+// INFIX_12-NEXT: Keyword/CurrNominal:                .Protocol[#P.Protocol#]; name=Protocol
+// INFIX_12-NEXT: Keyword/CurrNominal:                .Type[#P.Type#]; name=Type
+// INFIX_12: End completions
+
 func testInfix13() {
   P.foo#^INFIX_13^#
 }
+// NO_OPERATORS-NOT: Decl[InfixOperatorFunction]
+
 func testInfix14() {
   P.T#^INFIX_14^#
 }
 func testInfix15<T: P where T.T == S2>() {
   T#^INFIX_15^#
 }
+// INFIX_15: Begin completions, 4 items
+// INFIX_15-NEXT: Decl[AssociatedType]/CurrNominal:   .T; name=T
+// INFIX_15-NEXT: Decl[InstanceMethod]/CurrNominal:   .foo({#(self): P#})[#() -> S2#]; name=foo(self: P)
+// INFIX_15-NEXT: Keyword[self]/CurrNominal:          .self[#T.Type#]; name=self
+// INFIX_15-NEXT: Keyword/CurrNominal:                .Type[#T.Type#]; name=Type
+// INFIX_15: End completions
+
 func testInfix16<T: P where T.T == S2>() {
   T.foo#^INFIX_16^#
 }
+
+// INFIX_16: Begin completions, 2 items
+// INFIX_16-NEXT: Decl[InstanceMethod]/CurrNominal: ({#(self): P#})[#() -> S2#]; name=(self: P)
+// INFIX_16-NEXT: Keyword[self]/CurrNominal:        .self[#(T) -> () -> S2#]; name=self
+// INFIX_16: End completions
+
 func testInfix17(x: Void) {
   x#^INFIX_17^#
 }
+
+// VOID_OPERATORS: Begin completions
+// VOID_OPERATORS-DAG: Decl[InfixOperatorFunction]/OtherModule[Swift]/IsSystem:  != {#()#}[#Bool#]; name=!= ()
+// VOID_OPERATORS-DAG: Decl[InfixOperatorFunction]/OtherModule[Swift]/IsSystem:  == {#()#}[#Bool#]; name=== ()
+// VOID_OPERATORS-DAG: Decl[InfixOperatorFunction]/OtherModule[Swift]/IsSystem:  <= {#()#}[#Bool#]; name=<= ()
+// VOID_OPERATORS-DAG: Decl[InfixOperatorFunction]/OtherModule[Swift]/IsSystem:  >= {#()#}[#Bool#]; name=>= ()
+// VOID_OPERATORS-DAG: Decl[InfixOperatorFunction]/OtherModule[Swift]/IsSystem:  < {#()#}[#Bool#]; name=< ()
+// VOID_OPERATORS-DAG: Decl[InfixOperatorFunction]/OtherModule[Swift]/IsSystem:  > {#()#}[#Bool#]; name=> ()
+// VOID_OPERATORS: End completions
+
 func testInfix18(x: (S2, S2) {
   x#^INFIX_18^#
 }
@@ -269,9 +316,10 @@ class EmptyClass {}
 func testInfix19(x: EmptyClass) {
   x#^INFIX_19^#
 }
+
 // EMPTYCLASS_INFIX: Begin completions
-// EMPTYCLASS_INFIX-DAG: Decl[InfixOperatorFunction]/OtherModule[Swift]: === {#AnyObject?#}[#Bool#]
-// EMPTYCLASS_INFIX-DAG: Decl[InfixOperatorFunction]/OtherModule[Swift]: !== {#AnyObject?#}[#Bool#]
+// EMPTYCLASS_INFIX-DAG: Decl[InfixOperatorFunction]/OtherModule[Swift]/IsSystem: === {#AnyObject?#}[#Bool#]
+// EMPTYCLASS_INFIX-DAG: Decl[InfixOperatorFunction]/OtherModule[Swift]/IsSystem: !== {#AnyObject?#}[#Bool#]
 // EMPTYCLASS_INFIX: End completions
 
 enum E {
@@ -287,13 +335,16 @@ func testInfix21() {
 func testInfix22() {
   E.B#^INFIX_22^#
 }
+// INFIX_22: Begin completions, 2 items
+// INFIX_22-NEXT: Pattern/CurrModule:               ({#S2#})[#E#]; name=(S2)
+// INFIX_22: End completions
 
 func testSpace(x: S2) {
   x #^S2_INFIX_SPACE^#
 }
 // S2_INFIX_SPACE: Begin completions
 // S2_INFIX_SPACE-DAG: Decl[InfixOperatorFunction]/CurrModule: [' ']** {#Int#}[#S2#]
-// S2_INFIX_SPACE-DAG: Decl[InfixOperatorFunction]/OtherModule[Swift]: [' ']+ {#S2#}[#S2#]
+// S2_INFIX_SPACE-DAG: Decl[InfixOperatorFunction]/OtherModule[Swift]/IsSystem: [' ']+ {#S2#}[#S2#]
 // S2_INFIX_SPACE: End completions
 
 func testExtInfix1(x: inout S2) {
@@ -321,13 +372,13 @@ func testExtInfix2(x: S4) {
   x + x == x + x#^EXT_INFIX_2^#
 }
 // S4_EXT_INFIX: Begin completions
-// S4_EXT_INFIX-DAG: Decl[InfixOperatorFunction]/OtherModule[Swift]:  != {#Bool#}[#Bool#]
-// S4_EXT_INFIX-DAG: Decl[InfixOperatorFunction]/OtherModule[Swift]:  + {#S4#}[#S4#]
-// S4_EXT_INFIX-DAG: Decl[InfixOperatorFunction]/OtherModule[Swift]:  == {#Bool#}[#Bool#]
-// S4_EXT_INFIX-DAG: Decl[InfixOperatorFunction]/OtherModule[Swift]:  && {#Bool#}[#Bool#]
-// S4_EXT_INFIX-DAG: Decl[InfixOperatorFunction]/OtherModule[Swift]:  || {#Bool#}[#Bool#]
+// S4_EXT_INFIX-DAG: Decl[InfixOperatorFunction]/OtherModule[Swift]/IsSystem:  + {#S4#}[#S4#]
+// S4_EXT_INFIX-DAG: Decl[InfixOperatorFunction]/OtherModule[Swift]/IsSystem:  && {#Bool#}[#Bool#]
+// S4_EXT_INFIX-DAG: Decl[InfixOperatorFunction]/OtherModule[Swift]/IsSystem:  || {#Bool#}[#Bool#]
 // S4_EXT_INFIX: End completions
 
+// S4_EXT_INFIX-NEG-NOT: !=
+// S4_EXT_INFIX-NEG-NOT: ==
 // S4_EXT_INFIX_NEG-NOT: +++
 // S4_EXT_INFIX_NEG-NOT: &&&
 
@@ -335,7 +386,7 @@ func testExtInfix3(x: S4) {
    x + x#^EXT_INFIX_3^#
 }
 // S4_EXT_INFIX_SIMPLE: Begin completions
-// S4_EXT_INFIX_SIMPLE-DAG: Decl[InfixOperatorFunction]/OtherModule[Swift]:  + {#S4#}[#S4#]
+// S4_EXT_INFIX_SIMPLE-DAG: Decl[InfixOperatorFunction]/OtherModule[Swift]/IsSystem:  + {#S4#}[#S4#]
 // S4_EXT_INFIX_SIMPLE-DAG: Decl[InfixOperatorFunction]/CurrModule:  +++ {#S4#}[#S4#]
 // S4_EXT_INFIX_SIMPLE: End completions
 
@@ -361,3 +412,25 @@ func testAssignTuple2() {
   (x, y)#^ASSIGN_TUPLE_2^#
 }
 // ASSIGN_TUPLE_2: BuiltinOperator/None:                        = {#(S2, S2)#}[#Void#];
+
+
+infix operator ====: ComparisonPrecedence
+infix operator &&&& : LogicalConjunctionPrecedence
+infix operator |||| : LogicalDisjunctionPrecedence
+struct Boolish {}
+func ====(x: Boolish, y: Boolish) -> Boolish { return x }
+func &&&&(x: Boolish, y: @autoclosure ()->Boolish) -> Boolish { return x }
+func ||||(x: Boolish, y: @autoclosure ()->Boolish) -> Boolish { return x }
+
+func testAutoclosure(x: Boolish, y: Boolish) {
+  if x #^INFIX_AUTOCLOSURE_1^# {}
+  if x &&&& y #^INFIX_AUTOCLOSURE_2^# {}
+  if x |||| y #^INFIX_AUTOCLOSURE_3^# {}
+  if x &&&& x |||| y #^INFIX_AUTOCLOSURE_4^# {}
+}
+
+// INFIX_AUTOCLOSURE_1: Begin completions
+// INFIX_AUTOCLOSURE_1-DAG: Decl[InfixOperatorFunction]/CurrModule: [' ']&&&& {#Boolish#}[#Boolish#];
+// INFIX_AUTOCLOSURE_1-DAG: Decl[InfixOperatorFunction]/CurrModule: [' ']==== {#Boolish#}[#Boolish#];
+// INFIX_AUTOCLOSURE_1-DAG: Decl[InfixOperatorFunction]/CurrModule: [' ']|||| {#Boolish#}[#Boolish#];
+// INFIX_AUTOCLOSURE_1: End completions

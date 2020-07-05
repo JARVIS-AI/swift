@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -23,7 +23,7 @@ class LoopRegionFunctionInfo;
 class AliasAnalysis;
 class RCIdentityFunctionInfo;
 
-/// \brief Per-Region state.
+/// Per-Region state.
 class ARCRegionState {
 public:
   // TODO: These are relatively expensive, find something else to use here.
@@ -121,11 +121,11 @@ public:
 
   /// Blot \p Ptr.
   void clearBottomUpRefCountState(SILValue Ptr) {
-    PtrToBottomUpState.blot(Ptr);
+    PtrToBottomUpState.erase(Ptr);
   }
 
   /// Blot \p Ptr.
-  void clearTopDownRefCountState(SILValue Ptr) { PtrToTopDownState.blot(Ptr); }
+  void clearTopDownRefCountState(SILValue Ptr) { PtrToTopDownState.erase(Ptr); }
 
   void clearTopDownState() { PtrToTopDownState.clear(); }
   void clearBottomUpState() { PtrToBottomUpState.clear(); }

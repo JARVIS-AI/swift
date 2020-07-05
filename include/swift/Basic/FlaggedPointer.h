@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -17,12 +17,11 @@
 #ifndef SWIFT_BASIC_FLAGGEDPOINTER_H
 #define SWIFT_BASIC_FLAGGEDPOINTER_H
 
+#include <algorithm>
 #include <cassert>
 
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/PointerLikeTypeTraits.h"
-
-#include "Algorithm.h"
 
 namespace swift {
 
@@ -152,7 +151,7 @@ public:
 
 // Teach SmallPtrSet that FlaggedPointer is "basically a pointer".
 template <typename PointerTy, unsigned BitPosition, typename PtrTraits>
-class llvm::PointerLikeTypeTraits<
+struct llvm::PointerLikeTypeTraits<
   swift::FlaggedPointer<PointerTy, BitPosition, PtrTraits>> {
 public:
   static inline void *
@@ -170,7 +169,7 @@ public:
   enum {
     NumLowBitsAvailable = (BitPosition >= PtrTraits::NumLowBitsAvailable)
       ? PtrTraits::NumLowBitsAvailable
-      : (swift::min(int(BitPosition + 1),
+      : (std::min(int(BitPosition + 1),
         int(PtrTraits::NumLowBitsAvailable)) - 1)
   };
 };

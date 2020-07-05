@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -11,11 +11,13 @@
 //===----------------------------------------------------------------------===//
 
 #include "DictionaryKeys.h"
-#include "sourcekitd/sourcekitd.h"
 #include "sourcekitd/Internal.h"
 #include "sourcekitd/CodeCompletionResultsArray.h"
+#include "sourcekitd/DocStructureArray.h"
 #include "sourcekitd/DocSupportAnnotationArray.h"
+#include "sourcekitd/RawData.h"
 #include "sourcekitd/TokenAnnotationsArray.h"
+#include "sourcekitd/ExpressionTypeArray.h"
 #include "sourcekitd/Logging.h"
 #include "SourceKit/Core/LLVM.h"
 #include "SourceKit/Support/UIdent.h"
@@ -73,6 +75,8 @@ public:
   virtual Optional<StringRef> getString() const { return None; }
   virtual const char *getCString() const { return nullptr; }
   virtual bool getBool() const { return false; }
+  virtual const void *getDataPtr() const { return nullptr; }
+  virtual size_t getDataSize() const { return 0; }
 };
 
 class SKDDictionary: public SKDObject {
@@ -233,41 +237,49 @@ private:
 
 class SKDCustomData: public SKDObject {
 public:
-  SKDCustomData(CustomBufferKind BufferKind, 
-                std::unique_ptr<llvm::MemoryBuffer>& MemBuf)
-  : SKDObject(ObjectKind::CustomData), BufferKind(BufferKind),
-    BufferPtr(llvm::MemoryBuffer::getMemBufferCopy(
-                                                MemBuf->getBuffer(), 
-                                                MemBuf->getBufferIdentifier())) 
+  SKDCustomData(std::unique_ptr<llvm::MemoryBuffer> MemBuf)
+  : SKDObject(ObjectKind::CustomData), BufferPtr(std::move(MemBuf))
     {}
 
   SKDCustomData(SKDCustomData const&) = delete;
   SKDCustomData &operator=(SKDCustomData const&) = delete;
 
   sourcekitd_variant_type_t getVariantType() const override {
-    switch (BufferKind) {
+    switch (getBufferKind()) {
       case CustomBufferKind::TokenAnnotationsArray:
       case CustomBufferKind::DocSupportAnnotationArray:
       case CustomBufferKind::CodeCompletionResultsArray:
+      case CustomBufferKind::DocStructureArray:
+      case CustomBufferKind::InheritedTypesArray:
+      case CustomBufferKind::DocStructureElementArray:
+      case CustomBufferKind::AttributesArray:
+      case CustomBufferKind::ExpressionTypeArray:
         return SOURCEKITD_VARIANT_TYPE_ARRAY;
+      case CustomBufferKind::RawData:
+        return SOURCEKITD_VARIANT_TYPE_DATA;
     }
     llvm::report_fatal_error("sourcekitd object did not resolve to a known type");
   }
 
   CustomBufferKind getBufferKind() const {
-    return BufferKind;
+    return ((CustomBufferKind)*(const uint64_t*)_getStartPtr());
   }
 
-  const void *getDataPtr() const {
-    return BufferPtr->getBuffer().data();
+  const void *getDataPtr() const override {
+    return ((const void*)(((const uint64_t*)_getStartPtr())+1));
+  }
+
+  size_t getDataSize() const override {
+    return BufferPtr->getBuffer().size() - sizeof(uint64_t);
   }
 
   static bool classof(const SKDObject *O) {
     return O->getKind() == ObjectKind::CustomData;
   }
 private:
-  CustomBufferKind BufferKind;
   std::unique_ptr<llvm::MemoryBuffer> BufferPtr;
+
+  const void *_getStartPtr() const { return BufferPtr->getBuffer().data(); }
 };
 
 class SKDError: public SKDObject {
@@ -618,7 +630,12 @@ void ResponseBuilder::Dictionary::set(UIdent Key, const char *Str) {
 
 void ResponseBuilder::Dictionary::set(UIdent Key, StringRef Str) {
   static_cast<SKDObject *>(Impl)->set(SKDUIDFromUIdent(Key), 
-                                      new SKDString(Str));
+                                      new SKDString(std::string(Str)));
+}
+
+void ResponseBuilder::Dictionary::set(UIdent Key, const std::string &Str) {
+  static_cast<SKDObject *>(Impl)->set(SKDUIDFromUIdent(Key),
+                                      new SKDString(std::string(Str)));
 }
 
 void ResponseBuilder::Dictionary::set(UIdent Key, int64_t Val) {
@@ -629,7 +646,16 @@ void ResponseBuilder::Dictionary::set(SourceKit::UIdent Key,
                                       ArrayRef<StringRef> Strs) {
   auto ArrayObject = new SKDArray();
   for (auto Str : Strs) {
-    ArrayObject->set(SOURCEKITD_ARRAY_APPEND, new SKDString(Str));
+    ArrayObject->set(SOURCEKITD_ARRAY_APPEND, new SKDString(std::string(Str)));
+  }
+  static_cast<SKDObject *>(Impl)->set(SKDUIDFromUIdent(Key), ArrayObject);
+}
+
+void ResponseBuilder::Dictionary::set(SourceKit::UIdent Key,
+                                      ArrayRef<std::string> Strs) {
+  auto ArrayObject = new SKDArray();
+  for (auto Str : Strs) {
+    ArrayObject->set(SOURCEKITD_ARRAY_APPEND, new SKDString(std::string(Str)));
   }
   static_cast<SKDObject *>(Impl)->set(SKDUIDFromUIdent(Key), ArrayObject);
 }
@@ -646,10 +672,9 @@ ResponseBuilder::Dictionary::setDictionary(UIdent Key) {
 }
 
 void ResponseBuilder::Dictionary::setCustomBuffer(
-      SourceKit::UIdent Key,
-      CustomBufferKind Kind, std::unique_ptr<llvm::MemoryBuffer> MemBuf) {
+      SourceKit::UIdent Key, std::unique_ptr<llvm::MemoryBuffer> MemBuf) {
   static_cast<SKDObject *>(Impl)->set(SKDUIDFromUIdent(Key), 
-                                      new SKDCustomData(Kind, MemBuf));
+                                      new SKDCustomData(std::move(MemBuf)));
 }
 
 ResponseBuilder::Array
@@ -755,16 +780,23 @@ bool RequestDict::getInt64(SourceKit::UIdent Key, int64_t &Val,
   return false;
 }
 
-sourcekitd_response_t
-sourcekitd::createErrorRequestInvalid(const char *Description) {
-  return retained(new SKDError(SOURCEKITD_ERROR_REQUEST_INVALID, 
-                               StringRef(Description)));
+Optional<int64_t> RequestDict::getOptionalInt64(SourceKit::UIdent Key) {
+  auto Object = static_cast<SKDObject *>(Dict)->get(SKDUIDFromUIdent(Key));
+  if (!Object)
+    return None;
+  return Object->getInt64().getValueOr(0);
 }
 
 sourcekitd_response_t
-sourcekitd::createErrorRequestFailed(const char *Description) {
+sourcekitd::createErrorRequestInvalid(StringRef Description) {
+  return retained(new SKDError(SOURCEKITD_ERROR_REQUEST_INVALID, 
+                               Description));
+}
+
+sourcekitd_response_t
+sourcekitd::createErrorRequestFailed(StringRef Description) {
   return retained(new SKDError(SOURCEKITD_ERROR_REQUEST_FAILED, 
-                      StringRef(Description)));
+                               Description));
 }
 
 sourcekitd_response_t
@@ -787,8 +819,8 @@ static sourcekitd_variant_type_t SKDVar_get_type(sourcekitd_variant_t var) {
 }
 
 static bool SKDVar_array_apply(
-                               sourcekitd_variant_t array,
-                               sourcekitd_variant_array_applier_t applier) {
+    sourcekitd_variant_t array,
+    llvm::function_ref<bool(size_t, sourcekitd_variant_t)> applier) {
   return dyn_cast<SKDArray>(SKD_OBJ(array))->apply([&](size_t Index, 
                                                        SKDObjectRef Object){
     return applier(Index, variantFromSKDObject(Object));
@@ -827,8 +859,8 @@ static bool SKDVar_bool_get_value(sourcekitd_variant_t obj) {
 }
 
 static bool SKDVar_dictionary_apply(
-                              sourcekitd_variant_t dict,
-                              sourcekitd_variant_dictionary_applier_t applier) {
+    sourcekitd_variant_t dict,
+    llvm::function_ref<bool(sourcekitd_uid_t, sourcekitd_variant_t)> applier) {
   return dyn_cast<SKDDictionary>(SKD_OBJ(dict))->apply([&](sourcekitd_uid_t Key, 
                                                            SKDObjectRef Object){
     return applier(Key, variantFromSKDObject(Object));
@@ -889,6 +921,13 @@ static sourcekitd_uid_t SKDVar_uid_get_value(sourcekitd_variant_t obj) {
   return SKD_OBJ(obj)->getUID();
 }
 
+static const void *SKDVar_data_get_ptr(sourcekitd_variant_t obj) {
+  return SKD_OBJ(obj)->getDataPtr();
+}
+
+static size_t SKDVar_data_get_size(sourcekitd_variant_t obj) {
+  return SKD_OBJ(obj)->getDataSize();
+}
 
 static VariantFunctions SKDVariantFuncs = {
   SKDVar_get_type,
@@ -909,7 +948,9 @@ static VariantFunctions SKDVariantFuncs = {
   SKDVar_string_get_length,
   SKDVar_string_get_ptr,
   SKDVar_int64_get_value,
-  SKDVar_uid_get_value
+  SKDVar_uid_get_value,
+  SKDVar_data_get_size,
+  SKDVar_data_get_ptr,
 };
 
 static sourcekitd_variant_t variantFromSKDObject(SKDObjectRef Object) {
@@ -927,6 +968,25 @@ static sourcekitd_variant_t variantFromSKDObject(SKDObjectRef Object) {
       case CustomBufferKind::CodeCompletionResultsArray:
         return {{ (uintptr_t)getVariantFunctionsForCodeCompletionResultsArray(),
           (uintptr_t)DataObject->getDataPtr(), 0 }};
+      case CustomBufferKind::DocStructureArray:
+        return {{ (uintptr_t)getVariantFunctionsForDocStructureArray(),
+          (uintptr_t)DataObject->getDataPtr(), ~size_t(0) }};
+      case CustomBufferKind::InheritedTypesArray:
+        return {{ (uintptr_t)getVariantFunctionsForInheritedTypesArray(),
+          (uintptr_t)DataObject->getDataPtr(), 0 }};
+      case CustomBufferKind::DocStructureElementArray:
+        return {{ (uintptr_t)getVariantFunctionsForDocStructureElementArray(),
+          (uintptr_t)DataObject->getDataPtr(), 0 }};
+      case CustomBufferKind::AttributesArray:
+        return {{ (uintptr_t)getVariantFunctionsForAttributesArray(),
+          (uintptr_t)DataObject->getDataPtr(), 0 }};
+      case CustomBufferKind::ExpressionTypeArray:
+        return {{ (uintptr_t)getVariantFunctionsForExpressionTypeArray(),
+          (uintptr_t)DataObject->getDataPtr(), 0 }};
+      case CustomBufferKind::RawData:
+        return {{ (uintptr_t)getVariantFunctionsForRawData(),
+                  (uintptr_t)DataObject->getDataPtr(),
+                  (uintptr_t)DataObject->getDataSize() }};
     }
   }
   

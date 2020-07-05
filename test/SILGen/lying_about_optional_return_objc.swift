@@ -1,15 +1,14 @@
-// RUN: %target-swift-frontend(mock-sdk: %clang-importer-sdk) -import-objc-header %S/Inputs/block_property_in_objc_class.h -emit-silgen %s | %FileCheck %s
-// REQUIRES: objc_interop
+// RUN: %target-swift-emit-silgen(mock-sdk: %clang-importer-sdk) -enable-objc-interop -import-objc-header %S/Inputs/block_property_in_objc_class.h %s | %FileCheck %s
 
-// CHECK-LABEL: sil hidden @_TF32lying_about_optional_return_objc45optionalChainingForeignFunctionTypeProperties
+// CHECK-LABEL: sil hidden [ossa] @$s32lying_about_optional_return_objc0C37ChainingForeignFunctionTypeProperties{{[_0-9a-zA-Z]*}}F
 func optionalChainingForeignFunctionTypeProperties(b: BlockProperty?) {
-  // CHECK: enum $Optional<()>, #Optional.some!enumelt.1, {{%.*}} : $()
+  // CHECK: enum $Optional<()>, #Optional.some!enumelt, {{%.*}} : $()
   b?.readWriteBlock()
 
   // CHECK: enum $Optional
   _ = b?.readWriteBlock
 
-  // CHECK: enum $Optional<()>, #Optional.some!enumelt.1, {{%.*}} : $()
+  // CHECK: enum $Optional<()>, #Optional.some!enumelt, {{%.*}} : $()
   b?.readOnlyBlock()
 
   // CHECK: enum $Optional
@@ -18,7 +17,7 @@ func optionalChainingForeignFunctionTypeProperties(b: BlockProperty?) {
   // CHECK: unchecked_trivial_bit_cast
   _ = b?.selector
 
-  // CHECK: enum $Optional<()>, #Optional.some!enumelt.1, {{%.*}} : $()
+  // CHECK: enum $Optional<()>, #Optional.some!enumelt, {{%.*}} : $()
   _ = b?.voidReturning()
   // CHECK: unchecked_trivial_bit_cast
   _ = b?.voidPointerReturning()
@@ -51,39 +50,40 @@ func optionalChainingForeignFunctionTypeProperties(b: BlockProperty?) {
   // CHECK-LABEL: debug_value {{.*}} name "dynamic"
   let dynamic: AnyObject? = b!
 
-  // CHECK: enum $Optional<()>, #Optional.some!enumelt.1, {{%.*}} : $()
+  // CHECK: enum $Optional<()>, #Optional.some!enumelt, {{%.*}} : $()
   _ = dynamic?.voidReturning()
-  // CHECK: unchecked_trivial_bit_cast
+  // CHECK: unchecked_trivial_bit_cast {{.*}} $UnsafeMutableRawPointer to $Optional
   _ = dynamic?.voidPointerReturning()
-  // CHECK: unchecked_trivial_bit_cast
+  // CHECK: unchecked_trivial_bit_cast {{.*}} $OpaquePointer to $Optional
   _ = dynamic?.opaquePointerReturning()
-  // CHECK: unchecked_trivial_bit_cast
+  // CHECK: unchecked_trivial_bit_cast {{.*}} $UnsafeMutablePointer{{.*}} to $Optional
   _ = dynamic?.pointerReturning()
-  // CHECK: unchecked_trivial_bit_cast
+  // CHECK: unchecked_trivial_bit_cast {{.*}} $UnsafePointer{{.*}} to $Optional
   _ = dynamic?.constPointerReturning()
-  // CHECK: unchecked_trivial_bit_cast
+  // CHECK: unchecked_trivial_bit_cast {{.*}} $Selector to $Optional
   _ = dynamic?.selectorReturning()
-  // CHECK: unchecked_ref_cast
+  // CHECK: unchecked_ref_cast {{.*}} $BlockProperty to $Optional
   _ = dynamic?.objectReturning()
-  // CHECK: unchecked_trivial_bit_cast
+  // FIXME: Doesn't opaquely cast the selector result!
+  // C/HECK: unchecked_trivial_bit_cast {{.*}} $Selector to $Optional
   _ = dynamic?.selector
 
-  // CHECK: unchecked_bitwise_cast {{%.*}} : $Optional<{{.*}} -> {{.*}}> to $Optional<{{.*}} -> {{.*}}>
+  // CHECK: inject_enum_addr {{%.*}} : $*Optional<{{.*}} -> ()>, #Optional.some
   _ = dynamic?.voidReturning
-  // CHECK: unchecked_bitwise_cast {{%.*}} : $Optional<{{.*}} -> {{.*}}> to $Optional<{{.*}} -> {{.*}}>
+  // CHECK: inject_enum_addr {{%.*}} : $*Optional<{{.*}} -> UnsafeMutableRawPointer>, #Optional.some
   _ = dynamic?.voidPointerReturning
-  // CHECK: unchecked_bitwise_cast {{%.*}} : $Optional<{{.*}} -> {{.*}}> to $Optional<{{.*}} -> {{.*}}>
+  // CHECK: inject_enum_addr {{%.*}} : $*Optional<{{.*}} -> OpaquePointer>, #Optional.some
   _ = dynamic?.opaquePointerReturning
-  // CHECK: unchecked_bitwise_cast {{%.*}} : $Optional<{{.*}} -> {{.*}}> to $Optional<{{.*}} -> {{.*}}>
+  // CHECK: inject_enum_addr {{%.*}} : $*Optional<{{.*}} -> UnsafeMutablePointer{{.*}}>, #Optional.some
   _ = dynamic?.pointerReturning
-  // CHECK: unchecked_bitwise_cast {{%.*}} : $Optional<{{.*}} -> {{.*}}> to $Optional<{{.*}} -> {{.*}}>
+  // CHECK: inject_enum_addr {{%.*}} : $*Optional<{{.*}} -> UnsafePointer{{.*}}>, #Optional.some
   _ = dynamic?.constPointerReturning
-  // CHECK: unchecked_bitwise_cast {{%.*}} : $Optional<{{.*}} -> {{.*}}> to $Optional<{{.*}} -> {{.*}}>
+  // CHECK: inject_enum_addr {{%.*}} : $*Optional<{{.*}} -> Selector>, #Optional.some
   _ = dynamic?.selectorReturning
-  // CHECK: unchecked_bitwise_cast {{%.*}} : $Optional<{{.*}} -> {{.*}}> to $Optional<{{.*}} -> {{.*}}>
+  // CHECK: inject_enum_addr {{%.*}} : $*Optional<{{.*}} -> @owned BlockProperty>, #Optional.some
   _ = dynamic?.objectReturning
 
-  // CHECK: enum $Optional<()>, #Optional.some!enumelt.1, {{%.*}} : $()
+  // CHECK: enum $Optional<()>, #Optional.some!enumelt, {{%.*}} : $()
   _ = dynamic?.voidReturning?()
   // CHECK: unchecked_trivial_bit_cast
   _ = dynamic?.voidPointerReturning?()

@@ -2,7 +2,7 @@
 //
 // This source file is part of the Swift.org open source project
 //
-// Copyright (c) 2014 - 2016 Apple Inc. and the Swift project authors
+// Copyright (c) 2014 - 2017 Apple Inc. and the Swift project authors
 // Licensed under Apache License v2.0 with Runtime Library Exception
 //
 // See https://swift.org/LICENSE.txt for license information
@@ -10,9 +10,10 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "SourceKit/Support/UIdent.h"
 #include "SourceKit/Support/Concurrency.h"
+#include "SourceKit/Support/UIdent.h"
 #include "llvm/ADT/StringMap.h"
+#include "llvm/Support/Allocator.h"
 #include "llvm/Support/raw_ostream.h"
 #include <mutex>
 #include <vector>
@@ -34,7 +35,7 @@ public:
   static void setTag(void *Ptr, void *Tag);
   static void *getTag(void *Ptr);
 };
-}
+} // end anonymous namespace
 
 static UIDRegistryImpl *getGlobalRegistry() {
   static UIDRegistryImpl *GlobalRegistry = 0;

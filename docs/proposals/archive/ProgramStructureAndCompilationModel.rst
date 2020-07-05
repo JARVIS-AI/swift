@@ -1,6 +1,5 @@
 :orphan:
 
-.. @raise litre.TestsAreMissing
 .. _ProgramStructureAndCompilationModel:
 
 .. highlight:: none
@@ -111,7 +110,7 @@ Components are explicitly declared, and these declarations can include:
   "I depend on swift standard libs 1.4 or later"
 
 * a list of subcomponents that contribute to the component: "mac os consists of
-  appkit, coredata, …"
+  appkit, coredata, ..."
 
 * a list of resource files and other stuff that makes up the framework
 
